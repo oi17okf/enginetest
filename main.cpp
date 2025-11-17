@@ -139,21 +139,18 @@ struct shader_program {
     GLuint ID = 0;
     struct shader* vs;
     struct shader* fs;
-    std::map<std::string, GLuint> uniform_locations;
-    //uniform locations are achieved through opengl reflection.
+    std::map<std::string, GLuint> uniform_locations;  //uniform locations are achieved through opengl reflection.
     
 };
 
-// Search through objects folder.
-// go through each obj file there and parse them.
-// each obj is then saved in struct below, where every found type is given it's own list with a name.
 
-std::map<std::string, std::map<std::string, std::vector<std::float>>> objects;
+struct renderable {
 
-objects["cube"].
-struct obj_data {
-    std::map<std::string, std::vector<std::string>> data;
-}
+    unsigned int VAO;
+    unsigned int VBO;
+    unsigned int EBO;
+    int size;
+};
 
 
 
@@ -172,8 +169,8 @@ struct special_ingame_object {
 
 struct player {
     
-    float x; // x,y,z should be turned to vec3
-    float y;
+    float pos; // x,y,z should be turned to vec3
+    float vel;
     float has_dashed;
     float can_jump;
 
@@ -190,6 +187,30 @@ struct player_input {
     float rotate_cam_x = 0.0f;
     float rotate_cam_y = 0.0f;
 };
+
+void update_player(struct player_input& i) {
+
+    // check actual values, the only object that does collisions is the player, hence it no entity->entity collision.
+
+    acc += i.move_x
+    vel += acc;
+    pos += vel;
+
+
+    // check for collisions with static objects
+    // ressolve static coll
+
+    // check for collisions with all other objects.
+
+    // check input for player, and for example if we should punch something in front of us.
+
+}
+
+void update_spline_enemies() {
+
+    for all:
+        move along spline;
+}
 
 struct menu_input {
 
@@ -230,6 +251,104 @@ void initializeFontAtlas() {
     glBindTexture(GL_TEXTURE_2D, fontAtlasTextureID);
 }
 
+std::map<std::string, struct renderable> loadAllObjs() {
+
+    std::map<std::string, struct renderable> loadedObjs;
+
+    if (!std::filesystem::exists(textureDir) || !std::filesystem::is_directory(textureDir)) {
+        log("obj directory not found");
+        SDL_Quit();
+    }
+
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(textureDir)) {
+
+        if (!entry.is_regular_file()) { continue; }
+
+        std::ifstream file(entry.path());
+
+        if (!file.is_open()) { log("failed to open " + entry.path()); continue; }
+
+        std::string line;
+
+        std::string fileName = entry.path().stem().string();
+
+        std::vector<float> vertexes;
+        std::vector<float> uvs;
+        std::vector<float> normals;
+
+        std::set<std::tuple<int, int, int> keys;
+        std::vector<int> indexes;
+
+        while(std::getline(file, line)) {
+
+            std::stringstream ss(line);
+            std::vector<std::string> tokens;
+            std::string token;
+            while (ss >> token) { tokens.push_back(token); }
+
+            if (tokens[0] == "v" && tokens.length == 4) { // conv to helper func
+
+                vertexes.push_back(tokens[1]); 
+                vertexes.push_back(tokens[2]); 
+                vertexes.push_back(tokens[3]); 
+            }
+
+            if (tokens[0] == "vt" && tokens.length == 3) { 
+
+                uvs.push_back(tokens[1]); 
+                uvs.push_back(tokens[2]);  
+            }
+
+            if (tokens[0] == "vn" && tokens.length == 4) { 
+
+                normals.push_back(tokens[1]); 
+                normals.push_back(tokens[2]); 
+                normals.push_back(tokens[3]); 
+            }
+
+            if (tokens[0] == "f" && tokens.length == 4) { 
+
+                for (int i = 1; i <= 3; i++) {
+
+                    std::tuple<int, int, int> index = extractIndices(tokens[i]);
+                    if (keys.find(index)) { indexes.push_back(found_key); } 
+                    else                  { keys.push_back(index); indexes.push_back(keys.length); }
+                }
+            }
+        }
+
+        unsigned int VBO, EBO, VAO;
+        glGenVertexArrays(1, &VAO); 
+        glGenBuffers     (1, &VBO);      
+        glGenBuffers     (1, &EBO);   
+
+        glBindVertexArray(VAO); 
+        glBindBuffer     (GL_ARRAY_BUFFER, VBO);
+        glBindBuffer     (GL_ELEMENT_ARRAY_BUFFER, EBO);  
+
+        glBufferData(GL_ARRAY_BUFFER,         sizeof(vertices), vertices, GL_STATIC_DRAW); // unique vertex data
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),  indices,  GL_STATIC_DRAW); // indices
+
+        // pos, dim, type, normalized, stride, offset
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*) 0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*) (3 * sizeof(float)));
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*) (6 * sizeof(float)));
+
+        glBindVertexArray(0);
+
+        struct renderable r;
+        r.VAO = VAO;
+        r.VBO = VBO;
+        r.EBO = EBO;
+        r.size = keys.length;
+
+        loadedObjs[fileName] = r;
+
+    }
+
+    return loadedObjs;
+}
+
 // Out game will max have 50 textures, so it makes sense to just load all of them at startup and leave them on the GPU
 std::map<std::string, GLuint> loadAllTextures() {
 
@@ -237,7 +356,7 @@ std::map<std::string, GLuint> loadAllTextures() {
     
     if (!std::filesystem::exists(textureDir) || !std::filesystem::is_directory(textureDir)) {
         log("texture directory not found");
-        return loadedTextures;
+        SDL_Quit();
     }
 
     for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(textureDir)) {
