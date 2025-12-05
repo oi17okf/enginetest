@@ -10,26 +10,20 @@
 #include <SDL3/SDL_image.h>
 #include "glad/glad.h"
 
+static inline radians(float deg) { return deg * M_PI / 180.0f; }
 
-// core things to do.
-// 5. do terrain loading and 1st sweep terrain collision for player. (3h) FRE
-// D. integrate new 3d vectors FRE
-// P. Basic camera around player that is rotated by mouse and can zoom in/out (1h) LÖR
-// 8.5 Player movement. (1h) LÖR
-// 9. PLAYER COLLISION DETECTION & RESPONSE FOR STATIC OBJ LÖR
-// 10. NPC AI example. Enemy has a start point. SÖN
-// 11 Bouncers. SÖN
-    // Each second randomly selects a point within a square.
-    // It then walks towards that point. 
-    // If player is inside square. Enemy walks towards player.
-// 12. Basic animation for player when walking. SÖN
-    // Character is a sphere with sphere legs.
-// Load a level.
 
-// TIS CLEAN UP
+// integrate math_3d.h
+// get the menu system up and running so that we can select a level.
+// make it so a player (sphere) can walk across terrain on a level w a camera that can be moved by the mouse.
+// integrate start & goal along w a timer / highscore. (if difficult, ignore visualizing timer)
+// add in static objects w collisions
+// integrate splitscreen
+// make player controls a bit fun along w adding legs / simple animations
+// add in moving platforms, enemies, bouncers along w something interactable
+// update plan after this
+
 // ONS showcase
-
-// TORS + fredag level editor
 
 // ACTION SYSTEM ACTIONS - Z or X is used in conjunction with mouse.
 // TAB or SHIFT_TAB is used to shift between modes.
@@ -66,7 +60,9 @@ const std::string dataDir    = "./data/";
 const std::string atlasLoc   = "./fontatlas.png";
 
 
+int screen_width, screen_height;
 
+float deltaTime = 0.0f;
 
 GLuint fontAtlasTextureID = 0;
 GLuint textVAO, textVBO, textEBO;
@@ -248,9 +244,9 @@ struct 3d_text {
 
     std::string text;
     color c;
-    vec3 pos;
-    vec3 rot;
-    vec3 scale;
+    vec3_t pos;
+    vec3_t rot;
+    vec3_t scale;
 };
 
 void draw_3d_text(std::string s, int x, int y, int size, color c) {
@@ -295,8 +291,8 @@ struct level active_level;
 
 struct level {
 
-    int start_point;
-    int goal;
+    vec3_t start_point;
+    vec3_t goal;
 
     // static objects // here we can do static opengl arrays
     // moveable objects (they have a path they follow)
@@ -381,16 +377,72 @@ struct terrain {
 
 struct terrain active_terrain;
 
+
+// https://www.learnopengles.com/android-lesson-eight-an-introduction-to-index-buffer-objects-ibos/
 void loadTerrain(std::string file_name) {
 
     active_terrain.name   = file_name;
     active_terrain.height = IMG_Load(file_name + "_height.png");
     active_terrain.color  = IMG_Load(file_name + "_color.png");
 
-    int width  = surface->w;
-    int height = surface->h;
-    int bpp    = surface->format->BytesPerPixel;
-    int pitch  = surface->pitch;
+    //assert that height & color are the same.
+    int width  = active_terrain.height->w;
+    int height = active_terrain.height->h;
+    int bpp    = active_terrain.height->format->BytesPerPixel;
+    int pitch  = active_terrain.height->pitch;
+
+    std::vector<float> vertex;
+    std::vector<int>   index;
+
+    // While a visual map looks to represent a "tile",
+    // it insteads represent the top left vertex of that tile.
+
+    const float grid_size = 1.0f;
+
+    for (int i = 0; i < height; i++) {
+
+        for (int j = 0; j < width; j++) {
+
+            //look at types here. Not sure if we index properly, given that we get uint8 to float.
+            float height = active_terrain.height[(i * width + j) * bpp];
+            // we should also normalize height somewhat?
+
+            // Just input data for VBO here.
+            vertex.push_back(j *  grid_size); // X
+            vertex.push_back(i * -grid_size); // Y, grow down.
+            vertex.push_back(height);
+
+            float r = active_terrain.color[(i * width + j) * bpp];
+            float g = active_terrain.color[(i * width + j) * bpp + 1];
+            float b = active_terrain.color[(i * width + j) * bpp + 2];
+
+            vertex.push_back(r); 
+            vertex.push_back(g);
+            vertex.push_back(b);
+
+            // EBO
+            if (i != 0) {
+
+                int p1 = j + (i - 1) * width;
+                int p2 = j + i       * width;
+
+                // Extra index at start of row for degen tri.
+                if (i > 1 && j == 0) {
+                    index.push_back(p1);
+                }
+
+                index.push_back(p1);
+                index.push_back(p2);
+
+                if (i > 0 && i < height -1 && j == width - 1) {
+                    index.push_back(p2);
+                }
+
+            }
+
+        }
+
+    }
 
     glGenVertexArrays(1, &terrain.VAO);
     glGenBuffers     (1, &terrain.VBO);
@@ -400,32 +452,20 @@ void loadTerrain(std::string file_name) {
     glBindBuffer(GL_ARRAY_BUFFER, terrain.VBO);
     glBindBuffer(GL_ARRAY_BUFFER, terrain.EBO);
 
-    std::vector<float> vertex;
-    std::vector<int>   index;
+    glBufferData(GL_ARRAY_BUFFER,         sizeof(vertices), vertices, GL_STATIC_DRAW); // Change when we make terrain editable
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),  indices,  GL_STATIC_DRAW); // indices
 
-    // While a visual map looks to represent a "tile",
-    // it insteads represent the top left vertex of that tile.
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*) 0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*) (3 * sizeof(float)));
 
-    for (int i = 0; i < width; i++) {
+    glBindVertexArray(0);
 
-
-        for (int j = 0; j < height; j++) {
-
-            // Input data for a pixel into VBO
-            // Input data into EBO
-        }
-
-
-    }
-
-
-
-    // assert that height/color is the same width/height.
-    // assert
 
 }
 
 void cleanTerrain() {
+
+
 
 }
 
@@ -524,12 +564,34 @@ struct special_ingame_object {
     struct object* location;
 }
 
+struct camera {
+
+    float fov;
+    float width;
+    float height;
+    float near;
+    float far;
+
+
+    mat4_t proj;
+    mat4_t view;
+
+};
+
 struct player {
     
-    float pos; // x,y,z should be turned to vec3
-    float vel;
+    vec3_t pos; 
+    vec3_t vel;
+
+    float yaw;
+    float pitch;
+    float radius;
+
     float has_dashed;
     float can_jump;
+
+    struct camera cam;
+    struct timer t;
 
 };
 
@@ -543,20 +605,37 @@ struct player_input {
     int   punch        = 0;
     float rotate_cam_x = 0.0f;
     float rotate_cam_y = 0.0f;
+    float zoom         = 0.0f;
 
     int restart = 0;
     int quit    = 0;
 };
 
-void update_player(struct player_input& i) {
+void update_player(struct player_input& i, struct player& p) {
+
+
 
     last_frame_pos = player.pos;
+
+
+    // should we rotate camera first? not sure what impact is has on gameplay...
+
+
+    // update move based on either yaw or pitch.
+    acc.x = cosf(pitch); //something like this.
+    acc.z = sinf(pitch);
+
 
     acc += i.move_x
     vel += acc;
     pos += vel;
 
+    // https://www.youtube.com/watch?v=j_bTClbcCao
+    // bilinear interp
     // check collision with terrain, just z compared with heightmap to make super mario type of level.
+    const grid_size = 1.0f;
+
+    int x;
 
     // check for collisions with static objects
     // for (int i = 0; i < static_objects.length; i++) {
@@ -575,6 +654,38 @@ void update_player(struct player_input& i) {
     // if so, generate a small collision box sphere in front of us, and do another wave of collision checks with it.
     // these we can do with only enemies of perhaps even static objects, to recreate mario wall punch.
     // this box only checks the collision for this frame. 
+
+}
+
+
+// all structs have both their gameplay values and their rendering values, 
+// should usually just be uniforms though.
+struct moving_enemy {
+
+    vec3_t base_pos;
+    vec3_t current_pos;
+    vec3_t target_pos;
+    float radius;
+
+    int chase_player;
+    float speed;
+};
+
+
+// Maybe make enemies move around in 2d, 
+// but just update their 3d pos to the ground by using raycast?
+void update_moving_enemies() {
+
+    for all:
+
+        if (chase_player) {
+            // update target_pos
+            // if target_pos too far away
+                // chase_player = 0;
+                // target_pos = base_pos;
+
+        }
+
 
 }
 
@@ -1026,15 +1137,45 @@ void check_default_events(SDL_Event& event) {
     }
 }
 
+// Movement of character can just be done 
+
+void update_player_view(struct player& p) {
+
+    // Y is Up.
+    // The larger the pitch is, the closer to X,Z we will get.
+    vec3_t camera_pos = vec3( cosf(radians(p.yaw)) * cosf(radians(p.pitch)),
+                        sinf(radians(p.pitch)),
+                        sinf(radians(p.yaw)) * cosf(radians(p.pitch)))
+
+    vec3_t to   = vec3(p.pos.x, p.pos.y + 5, p.pos.z);
+    vec3_t up   = vec3(0.0f, 1.0f, 0.0f);
+    p.cam.view  = m4_look_at(camera_pos, to, up);
+
+}
+
 void setupPlayers(int count) {
 
     for (int i = 0; i < count; i++) {
 
-        //new player
-        //vector.push
+        struct player p;
+        p.pos        = vec3(level.startpos.x + i * 5, level.startpos.y, level.startpos.z);
+        p.vel        = vec3(0,0,0);
+        p.has_dashed = 0;
+        p.can_jump   = 0;
 
-        //set player pos to level.start
-        //reset player timer
+        p.cam.fov    = 90.0f;
+        p.cam.width  = screen_width / count;
+        p.cam.height = screen_height / count;
+        p.cam.near   = 0.1f;
+        p.cam.far    = 1000.0f;
+        p.cam.proj   = m4_perspective(p.cam.fov, p.cam.width / p.cam.height, near, far);
+
+        update_player_view(p);
+
+        reset_timer(p.t);
+
+        players.push_back(p);
+
     }
 }
 
@@ -1113,6 +1254,10 @@ void loadLevel(int level) {
 // Renderer
 // List of shaders & Last save date.
 
+
+
+
+
 int main(int argc, char* argv[]) {
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
@@ -1164,9 +1309,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Renderer: "       << (char*)glGetString(GL_RENDERER) << std::endl;
 
     
-    int width, height;
-    SDL_GetWindowSize(window, &width, &height);
-    glViewport(0, 0, width, height);
+
+    SDL_GetWindowSize(window, &screen_width, &screen_height);
+    glViewport(0, 0, screen_width, screen_widht);
     glClearColor(0.1f, 0.1f, 0.2f, 1.0f); 
 
     SDL_GL_SetSwapInterval(1); // vsync on
@@ -1187,6 +1332,7 @@ int main(int argc, char* argv[]) {
     loadShaders();
     loadShaderPrograms();
 
+    unsigned int lastFrame = SDL_GetTicksMS();
 
     while (!quit) {
 
@@ -1314,6 +1460,12 @@ int main(int argc, char* argv[]) {
         
         } else if (gamemode == GameMode::GAME) {
 
+            for (int i = 0; i < active_players; i++) {
+
+                update_player(p_input[i], players[i]); 
+
+            }
+
             // update timer(s)
 
             // update player(s) (does collision checks)
@@ -1392,6 +1544,13 @@ int main(int argc, char* argv[]) {
 
         // swap active render buffr.
         SDL_GL_SwapWindow(window);
+
+
+
+        unsigned int currentFrame = SDL_GetTicksMS();
+        deltaTime = 1.0f / (float)(currentFrame - lastframe); //TODO check calc.
+        lastFrame = currentFrame;
+
     }
 
     // pointless cleanup... but avoids valgrind errors.
