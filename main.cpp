@@ -1,20 +1,22 @@
 #include <iostream>
 #include <filesystem>
 #include <map>
+#include <vector>
 
 #define MATH_3D_IMPLEMENTATION
 #include "math_3d.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
-#include <SDL3/SDL_image.h>
+//#include <SDL3/SDL_image.h>
 #include "glad/glad.h"
 
 static inline radians(float deg) { return deg * M_PI / 180.0f; }
 
 
-// integrate math_3d.h
-// get the menu system up and running so that we can select a level.
+
+// TODO: FÅ MENU MED TEXT A KOMPILERA!!!! Kommentera bort annat tills vidare om det krånglar mycket...
+
 // make it so a player (sphere) can walk across terrain on a level w a camera that can be moved by the mouse.
 // integrate start & goal along w a timer / highscore. (if difficult, ignore visualizing timer)
 // add in static objects w collisions
@@ -23,7 +25,7 @@ static inline radians(float deg) { return deg * M_PI / 180.0f; }
 // add in moving platforms, enemies, bouncers along w something interactable
 // update plan after this
 
-// ONS showcase
+
 
 // ACTION SYSTEM ACTIONS - Z or X is used in conjunction with mouse.
 // TAB or SHIFT_TAB is used to shift between modes.
@@ -60,18 +62,61 @@ const std::string dataDir    = "./data/";
 const std::string atlasLoc   = "./fontatlas.png";
 
 
-int screen_width, screen_height;
+#define DEFAULT_WINDOW_WIDTH  640
+#define DEFAULT_WINDOW_HEIGHT 480
 
-float deltaTime = 0.0f;
 
-GLuint fontAtlasTextureID = 0;
-GLuint textVAO, textVBO, textEBO;
+struct render_globals {
 
-enum class GameMode { MENU, GAME };
-GameMode gamemode = GameMode::MENU;
+    GLuint fontAtlasTextureID = 0;
+    GLuint textVAO, textVBO, textEBO;
 
-enum class MenuItem { PLAYLEVEL1, PLAYLEVEL2, PLAYLEVEL3, SPLITSCREEN, QUIT };
-MenuItem active_menu_item = MenuItem::PLAYLEVEL1;
+};
+
+struct globals {
+
+    int window_width  = 0;
+    int window_height = 0;
+
+    float        delta_time           = 0.0f;
+    int          fps                  = 0;
+    unsigned int last_frame_timestamp = 0;
+
+    std::vector<std::string> menu_entries = { "PLAYLEVEL1", "EDITOR", "SPLITSCREEN", "QUIT" };
+
+    SDL_Gamepad*  gamepad;
+    SDL_Window*   window;
+    SDL_GLContext glContext;
+
+    struct render_global r;
+};
+
+struct globals g;
+
+
+// This can be updated to use SDL_GetPerformanceCounter() 
+// && SDL_GetPerformanceFrequency() if needed.
+void update_fps() {
+
+    unsigned int current_frame = SDL_GetTicksMS();
+    unsigned int ms_since_last_frame = (float)(current_frame - g.last_frame);
+
+    g.delta_time = ms_since_last_frame / 1000; 
+    g.fps = 1.0f / g.delta_time;
+    g.last_frame = current_frame;
+}
+
+void limit_fps(int fps_cap) {
+
+    float needed_delta = 1.0f / (float)fps_cap;
+
+    if (g.delta_time < needed_delta) {
+        SDL_Delay(needed_delta - g.delta_time);
+    }
+}
+
+enum class GameMode { INIT, MENU, GAME, EDITOR, QUIT };
+
 
 struct simple_mesh_data {
 
@@ -90,6 +135,15 @@ struct complex_mesh_data {
 
 };
 
+
+void clamp(int &val, int min, int max, int wrap) {
+
+    if (val < min && wrap) { val = max; }
+    if (val < min)         { val = min; }
+    if (val > max && wrap) { val = min; }
+    if (val > max)         { val = max; }
+
+}
 
 std::map<std::string name, simple_mesh_data> simple_mesh_map {
 
@@ -111,7 +165,7 @@ struct simple_object {
     // texture id
     // and implicit shader that will be used...
 
-    struct* collision = nullptr;
+    //struct* collision c = nullptr;
 
 };
 
@@ -216,7 +270,7 @@ std::vector<std::string> game_strings {
 
 
 //here we assume we are already in proper text/2d mode/correct shader.
-void draw_2d_text(std::string text, int x, int y, int size, color c) {
+void draw_2d_text(std::string text, int x, int y, int size, vec3_t color) {
 
     struct text_info t;
     try {
@@ -273,12 +327,7 @@ void draw_3d_text(std::string s, int x, int y, int size, color c) {
 
 }
 
-// these texts are potentially written to be entities that own them.
-// could in theory use the text field to represent state/emotion
-std::vector<struct 3d_text> 3d_texts = {
-    { "goomba", BLUE, pos, rot, scale },
-    { "boomba", BLUE, pos, rot, scale },
-}
+
 
 // RenderAllUIText
     // setup correct shaderprogram, 
@@ -287,24 +336,7 @@ std::vector<struct 3d_text> 3d_texts = {
         // setup correct vertex data
         // update specific uniform (color?)
 
-struct level active_level;
 
-struct level {
-
-    vec3_t start_point;
-    vec3_t goal;
-
-    // static objects // here we can do static opengl arrays
-    // moveable objects (they have a path they follow)
-    // speed boosts
-    // enemies1
-    // enemies2 (or make enemies a map?)
-    // terrain
-
-
-    int level_info_ref;
-
-};
 
 enum class ShaderType { VS, FS };
 
@@ -374,8 +406,6 @@ struct terrain {
     unsigned int VBO;
     unsigned int EBO;
 }
-
-struct terrain active_terrain;
 
 
 // https://www.learnopengles.com/android-lesson-eight-an-introduction-to-index-buffer-objects-ibos/
@@ -486,9 +516,6 @@ struct level_info {
     float bronze_time;
 
 };
-
-std::vector<struct level_info> level_infos;
-
 
 void loadLevelInfos() {
 
@@ -695,25 +722,6 @@ void update_spline_enemies() {
         move along spline;
 }
 
-struct menu_input {
-
-    int move    = 0;
-    int action  = 0;
-    int mouse_x = 0;
-    int mouse_y = 0;
-    int mouse_active = 0;
-}
-
-
-
-
-
-int active_players = 1;
-
-
-
-
-
 
 // implement Draw Call Reordering 
 
@@ -723,10 +731,6 @@ int active_players = 1;
 
 void log(char* s)       { std::cout << s << std::endl; }
 void log(std::string s) { std::cout << s << std::endl; }
-
-void cleanUp() {
-    // Fill in cleanup if needed later, most just for removing memory errors.
-}
 
 
 void initializeFontAtlas() {
@@ -742,12 +746,12 @@ std::map<std::string, struct renderable> loadAllObjs() {
     std::map<std::string, struct renderable> loadedObjs;
     std::map<std::string, struct AABB> loadedAABBS;
 
-    if (!std::filesystem::exists(textureDir) || !std::filesystem::is_directory(textureDir)) {
+    if (!std::filesystem::exists(objectDir) || !std::filesystem::is_directory(objectDir)) {
         log("obj directory not found");
         SDL_Quit();
     }
 
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(textureDir)) {
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(objectDir)) {
 
         if (!entry.is_regular_file()) { continue; }
 
@@ -1089,7 +1093,7 @@ SDL_Gamepad* getGamepad() {
     SDL_Gamepad* gamepad = nullptr;
 
     SDL_Gamepad** gamepads = SDL_GetGamepads();
-    if (gamepads != NULL && gamepads[0] != null) {
+    if (gamepads != nullptr && gamepads[0] != nullptr) {
         SDL_GamepadID instance_id = SDL_GetGamepadInstanceID(gamepads[0]);
         gamepad = SDL_OpenGameController(instance_id);
     }
@@ -1101,22 +1105,24 @@ SDL_Gamepad* getGamepad() {
 
 void check_default_events(SDL_Event& event) {
 
+    int quit = 0;
+
     switch (event.type) {
 
-        case SDL_EVENT_QUIT: { quit = true; break; }
+        case SDL_EVENT_QUIT: { quit = 1; break; }
         case SDL_EVENT_WINDOW_RESIZED: {
 
-            SDL_SetWindowSize(window, &width, &height); 
-            glViewport(0, 0, width, height);
+            SDL_SetWindowSize(g.window, &g.window_width, &g.window_height); 
+            glViewport(0, 0, g.window_width, g.window_height);
             break;
         }
 
         case SDL_EVENT_GAMEPAD_ADDED: {
 
-            if (activeGamepad == nullptr) {
+            if (g.gamepad == nullptr) {
 
                 SDL_GamepadID instance_id = event.gdevice.instance_id;
-                activeGamepad = SDL_OpenGameController(instance_id);
+                g.gamepad = SDL_OpenGameController(instance_id);
                 log("Controller connected");
             }
 
@@ -1127,14 +1133,16 @@ void check_default_events(SDL_Event& event) {
 
             if (activeGamepad != nullptr && event.gdevice.instance_id == SDL_GetGamepadInstanceID(activeGamepad)) {
 
-                SDL_CloseGamepad(activeGamepad);
-                activeGamepad = nullptr;
+                SDL_CloseGamepad(g.gamepad);
+                g.gamepad = nullptr;
                 log("Controller disconnected");
             }
 
             break;
         }
     }
+
+    return quit;
 }
 
 // Movement of character can just be done 
@@ -1198,10 +1206,12 @@ int loadGoal(std::ifstream &level_file) {
         log("error loading goal");
         return -1;
     }
+    return 0;
 }
 
 int loadStart(std::ifstream &level_file) {
     //prob identical to above...
+    return 0;
 }
 
 int loadStatics(std::ifstream &level_file) {
@@ -1218,6 +1228,8 @@ int loadStatics(std::ifstream &level_file) {
 
         static_vector.push_back(o);
     }
+
+    return 0;
 
 }
 
@@ -1254,8 +1266,448 @@ void loadLevel(int level) {
 // Renderer
 // List of shaders & Last save date.
 
+/* &&&&&&&&&&&&&&&&& MENU &&&&&&&&&&&&&&&&&&&&&&&& */
+
+struct menu_input {
+
+    int move    = 0;
+    int action  = 0;
+    int back    = 0;
+
+    int mouse_x = 0;
+    int mouse_y = 0;
+    int action_mouse = 0;
+    int mouse_active = 0;
+
+    int quit = 0;
+};
+
+struct menu_input getMenuInput() {
+
+    struct menu_input m_input = { 0 }; 
+
+    SDL_Event event;
+
+    while (SDL_PollEvent(&event)) {
+
+        m_input.quit = check_default_events(event);
+
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+
+            switch (event.key.key) {
+
+                case SDLK_ESCAPE:
+                case SDLK_ESCAPE: { m_input.back = 1; break; }
+
+                case SDLK_UP:     { m_input.move   =  1; mouse_active = 0; break;  }
+                case SDLK_DOWN:   { m_input.move   = -1; mouse_active = 0; break;  }
+                case SDLK_SPACE:
+                case SDLK_ENTER:  { m_input.action =  1; break; }
+
+                default: { break; } 
+            }
+        }
+
+        if (event.type == SDL_EVENT_MOUSE_MOTION) {
+
+            m_input.mouse_x = event.mmotion.x;
+            m_input.mouse_y = event.mmotion.y; 
+            mouse_active = 1;
+        }   
+
+    }
+
+    return m_input;
+}
+
+struct menu_state {
+
+    GameMode gamemode  = GameMode::MENU;
+    int selected_players = 1;
+    int active_item      = 0;
+    int edit_level       = 0;
+    int play_level       = 0;
+
+    std::map<std::string, struct level_info> levels;
+
+    std::vector<std::string> menu_items = { "PLAY", "TOGGLE PLAYERS", "EDIT", "REFRESH LEVELS", "QUIT" };
+    int item_space = 100;
+
+};
 
 
+GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
+
+    GameMode gamemode = GameMode::MENU;
+
+    int menu_items_count = state.menu_items.size();
+    if (state.edit_level) { menu_items_count = levels.size() + 2; }
+    if (state.play_level) { menu_items_count = levels.size() + 1; }
+
+    if (i.mouse_active) {
+
+        int inside_borders = ( i.mouse_x > 100 && i.mouse_x < window_width - 100 && i.mouse_y > state.item_space && i.mouse_y < (menu_items_count + 1) * state.item_space );
+        if (inside_borders) {
+
+            active_menu_item = (i.mouse_y - state.item_space) / state.item_space;
+        }
+
+    } else {
+
+        active_menu_item += i.move; 
+        clamp(active_menu_item, 0, menu_items_count)
+    }
+
+    if (i.action || i.mouse_active && i.action_mouse) {
+
+        if (state.edit_level) {
+
+            if (state.active_item == 0) { 
+
+                createNewLevel();
+                state.gamemode = GameMode::EDIT; 
+
+            } else if (state.active_item == menu_items_count - 1) {
+
+                state.edit_level  = 0;
+                state.active_item = 2;
+
+            } else {
+
+                setupEditLevel(state.active_item - 1);
+                gamemode = GameMode::EDIT;
+            }
+
+        } else if (state.play_level) {
+
+            if (state.active_item == menu_items_count - 1) {
+
+                state.play_level  = 0;
+                state.active_item = 0;
+            } else {
+
+                setupPlayLevel(state.active_item - 1);
+                gamemode = GameMode::PLAY;
+            }
+
+        } else {
+
+            if (state.menu_items[active_menu_item] == "PLAY")           { state.play_level = 1; }
+            if (state.menu_items[active_menu_item] == "TOGGLE PLAYERS") { state.selected_players = state.selected_players == 1 ? 2 : 1; }
+            if (state.menu_items[active_menu_item] == "EDIT")           { state.edit_level = 1; }
+            if (state.menu_items[active_menu_item] == "REFRESH LEVELS") { refreshLevels(state); }
+            if (state.menu_items[active_menu_item] == "QUIT")           { gamemode = GameMode::QUIT; }
+        }
+    }
+
+    if (i.back) {
+
+        if (state.play_level || state.edit_level) {
+
+            state.play_level = 0;
+            state.edit_level = 0;
+
+        } else {
+
+            state.gamemode = GameMode::QUIT;
+        }
+    }
+
+    if (i.quit) { state.gamemode = GameMode::QUIT; }
+
+}
+
+void renderMenu() {
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    colors[active_menu_item] = GREEN;
+    // glUseProgram(programs["text2d"].pos);
+    for (int i = 0; i < menu_entries.size(); i++) {
+        vec3_t color = vec3(1, 0, 0);
+        if (i == selected_index) { color = vec3(0, 1, 0); }
+        drawtext_2d(menu_entries[i], x, y * i, size, color);
+    }
+    // drawText2d("blabla")
+    // render text for all menu options
+    // render selected text with different color
+
+
+    SDL_GL_SwapWindow(window);
+}
+
+
+struct menu_result {
+
+    int active_players = 1;
+    struct level l;
+
+};
+
+struct menu_result runMenu(struct menu_result &res) {
+
+    struct menu_state state;
+    GameMode gamemode = GameMode::MENU;
+
+    while (gamemode == GameMode::MENU) {
+
+        struct menu_input = getMenuInput();
+
+        gamemode = doMenuLogic(state, menu_input);
+        update_fps();
+        limit_fps(30);
+
+        renderMenu(state);
+
+    }
+
+    // Convert important info from state to settings / world? But we also want to throw away stuff...
+    //cleanup, if any.
+
+    res.active_players = state.active_players;
+    //res.l = ???
+
+    return gamemode;
+
+}
+
+// Add pause if time...
+struct player_input {
+
+    float move_x       = 0;
+    float move_y       = 0;
+    int   jump         = 0;
+    int   floating     = 0;
+    int   dash         = 0;
+    int   punch        = 0;
+    float rotate_cam_x = 0.0f;
+    float rotate_cam_y = 0.0f;
+    float zoom         = 0.0f;
+
+    int restart = 0;
+    int pause   = 0;
+    int quit    = 0;
+};
+
+void getPlayInput(int active_players, struct player_input* inputs) {
+
+    int c = active_players - 1; // What to call this idk
+
+    while (SDL_PollEvent(&event)) {
+
+        inputs[0].quit = check_default_events(event);
+
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+
+            switch (event.key.key) {
+
+                case SDLK_SPACE: { inputs[0].jump    = 1; break; }
+                case SDLK_SHIFT: { inputs[0].dash    = 1; break; }
+                case SDLK_R:     { inputs[0].restart = 1; break; }
+                case SDLK_P:     { inputs[0].pause   = 1; break; }
+                
+                default: { break; }
+            }
+        }
+
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+
+            switch (event.mbutton.button) {
+
+                case SDL_BUTTON_LEFT:  { inputs[0].punch = 1; break; }
+                case SDL_BUTTON_RIGHT: { inputs[0].punch = 1; break; }
+
+                default: { break; } 
+            }
+        }
+
+        if (event.type == SDL_EVENT_MOUSE_MOTION) {
+
+            if (event.mmotion.xrel > 0.01f || event.mmotion.xrel < -0.01f) {
+                inputs[0].rotate_cam_x = event.mmotion.xrel;
+            }
+
+            if (event.mmotion.yrel > 0.01f || event.mmotion.yrel < -0.01f) {
+                inputs[0].rotate_cam_y = event.mmotion.yrel;
+            }
+        }
+
+        if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+
+            inputs[0].zoom = event.wheel.y;
+        }   
+
+        if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+
+            switch (event.gbutton.button) {
+
+                case SDL_GAMEPAD_BUTTON_SOUTH:          { inputs[c].jump    = 1;  break; }
+                case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  { inputs[c].dash    = 1;  break; }
+                case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: { inputs[c].punch   = 1;  break; }
+                case SDL_GAMEPAD_BUTTON_NORTH:          { inputs[c].restart = 1;  break; }
+                case SDL_GAMEPAD_BUTTON_BACK:           { inputs[c].quit    = 1;  break; }
+                case SDL_GAMEPAD_BUTTON_START:          { inputs[c].pause   = 1;  break; }
+
+                default: { break; } 
+            }
+        }                                    
+    }
+
+    const Uint8* keystate = SDL_GetKeyboardState(nullptr);
+
+    if (keystate[SDL_SCANCODE_SPACE]) { inputs[0].floating  = 1; }
+    if (keystate[SDL_SCANCODE_W])     { inputs[0].move_y   += 1; }
+    if (keystate[SDL_SCANCODE_S])     { inputs[0].move_y   -= 1; }
+    if (keystate[SDL_SCANCODE_A])     { inputs[0].move_x   += 1; }
+    if (keystate[SDL_SCANCODE_D])     { inputs[0].move_x   -= 1; }
+
+    // if splitscreen & controller active
+    if (g.gamepad != nullptr &&) {
+
+        if (SDL_GetGamepadButton(g.gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) { inputs[c].floating = 1; }
+
+
+        inputs[c].move_x       = SDL_GetGamepadAxis(g.gamepad, SDL_GAMEPAD_AXIS_LEFTX)  / 32767.0f;
+        inputs[c].move_y       = SDL_GetGamepadAxis(g.gamepad, SDL_GAMEPAD_AXIS_LEFTY)  / 32767.0f;
+        inputs[c].rotate_cam_x = SDL_GetGamepadAxis(g.gamepad, SDL_GAMEPAD_AXIS_RIGHTX) / 32767.0f * 10.0f;
+        inputs[c].rotate_cam_y = SDL_GetGamepadAxis(g.gamepad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0f * 10.0f;
+
+        clamp(inputs[c].move_x, -1, 1, 0);
+        clamp(inputs[c].move_y, -1, 1, 0);
+        clamp(inputs[c].rotate_cam_x, -10, 10, 0);
+        clamp(inputs[c].rotate_cam_y, -10, 10, 0);
+    } 
+    
+}
+
+struct play_state {
+
+    vec3_t start_point;
+    vec3_t goal_point;
+
+    int active_players;
+
+    std::vector<struct 3d_text>      3d_texts;
+    std::vector<struct static_obj>   statics;
+    std::vector<struct moveable_obj> moveables;
+    std::vector<struct stat_boost>   stat_boosts; 
+    std::vector<struct enemy>        enemies;
+
+    struct terrain t;
+
+};
+
+GameMode doPlayLogic(int active_players, struct play_state &state, struct player_input* inputs) {
+
+
+
+
+}
+
+
+void renderPlay(int active_players, const struct play_state &state) {
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+
+
+    for (int i = 0; i < active_players; i++) {
+
+        int startx = i       / active_players * g.screen_width;
+        int starty = i       / active_players * g.screen_height;
+        int endx   = (i + 1) / active_players * g.screen_width;
+        int endy   = (i + 1) / active_players * g.screen_height;
+        glViewport(startx, starty, endx, endy);
+
+        //render terrain / background / skybox
+        //render static platform objects
+        //render enemies
+        //render player
+        //render 3d text
+        // setup 3d text shader
+        // for (3d_text t : 3d_texts) { drawtext_3d(t); }
+
+        //render any ui stuff specific to a player
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        //ui stuff
+        //render timer
+        glEnable(GL_DEPTH_TEST); 
+        glEnable(GL_CULL_FACE);
+    } 
+
+    glViewport(0, 0, g.screen_width, g.screen_height);
+    //render any ui stuff not specific to a player
+    // renderAllTextUI()
+    //glDisable(GL_DEPTH_TEST);
+    //glDisable(GL_CULL_FACE);
+
+
+
+    glEnable(GL_DEPTH_TEST); 
+    glEnable(GL_CULL_FACE);  
+}
+
+
+// This could be used to move between editor and play mode in a clunky but doable way...
+struct play_res {
+
+    float new_highscore;
+};
+
+GameMode runGame(struct play_result &res, struct level_info level_info, int active_players) {
+
+    GameMode gamemode = GameMode::PLAY;
+    struct play_state state;
+    state.active_players = active_players;
+    // Fill state with values from level_info...
+
+    while (gamemode == GameMode::PLAY) {
+
+        struct player_input inputs[active_players];
+
+        getPlayInput(active_players, inputs);
+        
+        gamemode = doPlayLogic(active_players, state, inputs);
+        update_fps();
+        limit_fps(120);
+        
+        renderPlay(active_players, state);
+
+        // Should we also do this in all other states?
+        checkShaders();
+        checkShaderPrograms();
+        cleanShaders();
+
+    }
+
+
+
+
+    //fill res
+    res.new_highscore = 1;
+
+    return gamemode;
+
+}
+
+
+GameMode runEditor(struct edit_result &res, struct level_info level_info) {
+
+    GameMode gamemode = GameMode::EDIT;
+    struct edit_state state;
+    //fill w values from level_info
+
+    while (gamemode == GameMode::EDIT) {
+
+        // Input
+        // Logic
+        // Render (will share a lot from game_render)
+        // Most things her will, so make sure to do Play w functions.
+    }
+
+}
 
 
 int main(int argc, char* argv[]) {
@@ -1273,14 +1725,14 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-    SDL_Window* window = SDL_CreateWindow("SDL3 + OpenGL + GLAD Example", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    g.window = SDL_CreateWindow("Gnario 64", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!window) {
         std::cerr << "Window could not be created! SDL_Error: " << SDL_GetError() << std::endl;
         SDL_Quit();
         return 1;
     }
 
-    SDL_GLContext glContext = SDL_GL_CreateContext(window);
+    g.glContext = SDL_GL_CreateContext(g.window);
     if (!glContext) {
         std::cerr << "OpenGL context could not be created! SDL_Error: " << SDL_GetError() << std::endl;
         SDL_DestroyWindow(window);
@@ -1288,9 +1740,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (SDL_GL_MakeCurrent(window, glContext) < 0) {
+    if (SDL_GL_MakeCurrent(g.window, glContext) < 0) {
         std::cerr << "Failed to make OpenGL context current! SDL_Error: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(window);
+        SDL_GL_DestroyContext(g.glContext);
+        SDL_DestroyWindow(g.window);
         SDL_Quit();
         return 1;
     }
@@ -1298,7 +1751,8 @@ int main(int argc, char* argv[]) {
     
     if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
         std::cerr << "Failed to initialize GLAD" << std::endl;
-        SDL_DestroyWindow(window);
+        SDL_GL_DestroyContext(g.glContext);
+        SDL_DestroyWindow(g.window);
         SDL_Quit();
         return 1;
     }
@@ -1310,18 +1764,17 @@ int main(int argc, char* argv[]) {
 
     
 
-    SDL_GetWindowSize(window, &screen_width, &screen_height);
-    glViewport(0, 0, screen_width, screen_widht);
+    SDL_GetWindowSize(g.window, &g.screen_width, &g.screen_height);
+    glViewport(0, 0, g.screen_width, g.screen_height);
     glClearColor(0.1f, 0.1f, 0.2f, 1.0f); 
 
     SDL_GL_SetSwapInterval(1); // vsync on
 
 
-    SDL_Gamepad* activeGamepad = getGamepad();
-    if (activeGamepad != nullptr) { log("Gamepad connected at startup - splitscreen available"); }
+    g.gamepad = getGamepad();
+    if (g.gamepad != nullptr) { log("Gamepad connected at startup - splitscreen available"); }
 
-    bool quit = false;
-    SDL_Event event;
+    GameMode gamemode = GameMode::INIT;
 
     initializeFontAtlas();
     initializeTexts();
@@ -1332,234 +1785,32 @@ int main(int argc, char* argv[]) {
     loadShaders();
     loadShaderPrograms();
 
-    unsigned int lastFrame = SDL_GetTicksMS();
+    gamemode = GameMode::MENU;
 
-    while (!quit) {
+    g.last_frame = SDL_GetTicksMS();
 
-        struct menu_input m_input;
-        struct p_input[active_players]; //depends on splitscreen
-        
-        // ------ INPUT ---------//
-        while (SDL_PollEvent(&event)) {
+    struct menu_result menu_res;
+    struct play_result play_res;
+    struct edit_result edit_res;
 
-            check_default_events(event);
-
-            if (GameMode::MENU) {
-
-                if (event.type == SDL_EVENT_KEY_DOWN) {
-
-                    switch (event.key.key) {
-                    case SDLK_ESCAPE: { quit = true; break; }
-                    case SDLK_1: { //debug remove l8er
-                        if (activeGamepad != nullptr) { active_players = active_players == 1 ? 2 : 1; }
-                        break;
-                    }
-                    case SDLK_UP:    { m_input.move   =  1; mouse_active = 0; break;  }
-                    case SDLK_DOWN:  { m_input.move   = -1; mouse_active = 0; break;  }
-                    case SDLK_SPACE:
-                    case SDLK_ENTER: { m_input.action =  1; break; }
-                    default: { break; } }
-                }
-
-                if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                    m_input.mouse_x = event.mmotion.x;
-                    m_input.mouse_y = event.mmotion.y; 
-                    mouse_active = 1;
-                }   
-
-            } else if (GameMode::GAME) {
-
-                
-
-                if (event.type == SDL_EVENT_KEY_DOWN) {
-
-                    switch (event.key.key) {
-                    case SDLK_SPACE: { p_input[0].jump = 1; break; }
-                    case SDLK_SHIFT: { p_input[0].dash = 1; break; }
-                    default: { break; } }
-                }
-
-                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-
-                    switch (event.mbutton.button) {
-                    case SDL_BUTTON_LEFT:  { p_input[0].punch = 1; break; }
-                    case SDL_BUTTON_RIGHT: { p_input[0].punch = 1; break; }
-                    default: { break; } }
-                }
-
-                if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                    if (event.mmotion.xrel > 0.01f || event.mmotion.xrel < -0.01f) {
-                        p_input[0].rotate_cam_x = event.mmotion.xrel;
-                    }
-                    if (event.mmotion.yrel > 0.01f || event.mmotion.yrel < -0.01f) {
-                        p_input[0].rotate_cam_y = event.mmotion.yrel;
-                    }
-                }   
-
-                if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && active_players == 2) {
-                    switch (event.gbutton.button) {
-                    case SDL_GAMEPAD_BUTTON_A:              { p_input[1].jump = 1;  break; }
-                    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  { p_input[1].dash = 1;  break; }
-                    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: { p_input[1].punch = 1; break; }
-                    default: { break; } }
-                }                                    
-
-            }
-            
-        }
-
-        if (gamemode == GameMode::GAME) {
-
-            const Uint8* keystate = SDL_GetKeyboardState(NULL);
-            if (keystate[SDL_SCANCODE_SPACE]) { p_input[0].floating  = 1; }
-            if (keystate[SDL_SCANCODE_W])     { p_input[0].move_y   += 1; }
-            if (keystate[SDL_SCANCODE_S])     { p_input[0].move_y   -= 1; }
-            if (keystate[SDL_SCANCODE_A])     { p_input[0].move_x   += 1; }
-            if (keystate[SDL_SCANCODE_D])     { p_input[0].move_x   -= 1; }
-
-            // if splitscreen & controller active
-            if (activeGamepad != null && active_players == 2 &&) {
-                if (SDL_GetGamepadButton(activeGamepad, SDL_GAMEPAD_BUTTON_A)) {
-                    p_input[1].floating = 1;
-                }
-            } 
-        }
-
-        // --- INPUT END --- //
-
-        checkShaders();
-        checkShaderPrograms();
-        cleanShaders();
-
-        // -------- LOGIC ----------- //
+    while (gamemode != GameMode::QUIT) {
 
 
-        if (gamemode == GameMode::MENU) {
+        switch (gamemode) {
 
-
-
-            if (m_input.mouse_active) {
-                int inside_borders = ( m_input.x > 100 && m_input.x < width - 100 && 
-                                       m_input.y > 200 && m_input.y < height - 200 );
-                if (inside_borders) {
-                    active_menu_item = (m_input.y - 200) / 100; // this breaks if we change window size
-                }
-            } else {
-                active_menu_item += m_input.move;  
-            }
-
-            if (m_input.press) {
-
-                switch (active_menu_item) {
-                case MenuItem::PLAYLEVEL1:  { loadLevel(1); setupPlayers(active_players); gamemode = GameMode::GAME; break; }
-                case MenuItem::PLAYLEVEL2:  { loadLevel(2); setupPlayers(active_players); gamemode = GameMode::GAME; break; }
-                case MenuItem::PLAYLEVEL3:  { loadLevel(3); setupPlayers(active_players); gamemode = GameMode::GAME; break; }
-                case MenuItem::SPLITSCREEN: { active_players = active_players == 1 ? 2 : 1; break; }
-                case MenuItem::QUIT:        { quit = true; break; } }
-            }
-        
-        } else if (gamemode == GameMode::GAME) {
-
-            for (int i = 0; i < active_players; i++) {
-
-                update_player(p_input[i], players[i]); 
-
-            }
-
-            // update timer(s)
-
-            // update player(s) (does collision checks)
-
-        } else if (gamemode == GameMode::EDITOR) {
-
-        }
-        // nothing so far.. we are poor on logic.
-
-
-
-        // --------------- RENDER --------------
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        if (gamemode == GameMode::MENU) {
-            // render some type of background mby?
-                // if so setup 3d pipeline etc.
-
-            // setup everything for text rendering
-            // is it anything more than glUseProgram???
-            color colors[X] = { RED };
-            colors[active_menu_item] = GREEN;
-            std::vector<std::string> menu_entries = { "X", "Y", "Z"}
-            // glUseProgram(programs["text2d"].pos);
-            for (int i = 0; i < menu_entries.length(); i++) {
-                color c = red;
-                if (i == selected_index) { c = green; }
-                drawtext_2d(menu_entries[i], x, y * i, size, c);
-            }
-            // drawText2d("blabla")
-            // render text for all menu options
-            // render selected text with different color
-
-        } else if (gamemode == GameMode::GAME) {
-
-            // check if splitscreen, if so do rendering twice w different viewports...
-            for (int i = 0; i < active_players; i++) {
-
-                int startx = i       / active_players * width;
-                int starty = i       / active_players * height;
-                int endx   = (i + 1) / active_players * width;
-                int endy   = (i + 1) / active_players * height;
-                glViewport(startx, starty, endx, endy);
-
-                //render terrain / background / skybox
-                //render static platform objects
-                //render enemies
-                //render player
-                //render 3d text
-                // setup 3d text shader
-                // for (3d_text t : 3d_texts) { drawtext_3d(t); }
-
-                //render any ui stuff specific to a player
-                //glDisable(GL_DEPTH_TEST);
-                //glDisable(GL_CULL_FACE);
-                //ui stuff
-                //render timer
-                glEnable(GL_DEPTH_TEST); 
-                glEnable(GL_CULL_FACE);
-            } 
-
-            glViewport(0, 0, width, height);
-            //render any ui stuff not specific to a player
-            // renderAllTextUI()
-            //glDisable(GL_DEPTH_TEST);
-            //glDisable(GL_CULL_FACE);
-
-
-
-            glEnable(GL_DEPTH_TEST); 
-            glEnable(GL_CULL_FACE);   
-
-        } else if (gamemode == GameMode::Editor) {
+            case GameMode::MENU:   { gamemode = runMenu  (menu_res);   }
+            case GameMode::GAME:   { gamemode = runGame  (play_res, menu_res.l, menu_res.active_players);   }
+            case GameMode::EDITOR: { gamemode = runEditor(edit_res, menu_res.l); }
 
         }
 
-        // swap active render buffr.
-        SDL_GL_SwapWindow(window);
-
-
-
-        unsigned int currentFrame = SDL_GetTicksMS();
-        deltaTime = 1.0f / (float)(currentFrame - lastframe); //TODO check calc.
-        lastFrame = currentFrame;
 
     }
 
     // pointless cleanup... but avoids valgrind errors.
-    SDL_GL_DestroyContext(glContext);
-    SDL_DestroyWindow(window);
+    SDL_GL_DestroyContext(g.glContext);
+    SDL_DestroyWindow(g.window);
     SDL_Quit();
 
-    return 0;
+    return 0; 
 }
-
-
-

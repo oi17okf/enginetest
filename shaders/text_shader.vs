@@ -1,6 +1,6 @@
 #version 330 core
 layout (location = 0) in vec2 vertexPos; //avoids glGetAttribLocation
-layout (location = 1) in vec2 vertexUV;
+layout (location = 1) in vec2 vertexUV; // note: we can skip locations
 
 out vec2 UV;
 
