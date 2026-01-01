@@ -7,6 +7,10 @@ uniform vec3 color;
 
 void main() {
 
-    float alpha = texture(textAtlas, UV).r;  
+    float alpha   = texture(textAtlas, UV).r;  
+    //vec4 c   = texture(textAtlas, UV); 
+    //fragColor = c;
+    //fragColor   = vec4(1, 0, 0, 1);
     fragColor   = vec4(color, alpha);
+
 }

@@ -141,7 +141,7 @@ void limit_fps(int fps_cap) {
     float needed_delta = 1.0f / (float)fps_cap;
 
     if (g.delta_time < needed_delta) {
-        SDL_Delay(needed_delta - g.delta_time);
+        SDL_Delay((needed_delta - g.delta_time) * 1000 );
     }
 }
 
@@ -233,7 +233,7 @@ void initializeTimerRenderer() {
 
 
 
-void appendVertexData(std::string s, std::vector<float> &vertexes, std::vector<int> &indexes) {
+void appendVertexData(std::string s, int pos, std::vector<float> &vertexes, std::vector<unsigned int> &indexes) {
 
     const int   ascii_offset = -32; // Space has ascii index 32, altas start with Space.
     const int   atlas_size   = 10;
@@ -242,7 +242,7 @@ void appendVertexData(std::string s, std::vector<float> &vertexes, std::vector<i
     for (int j = 0; j < s.size(); j++) {
 
         char c = s[j];
-        int uv_y = (c + ascii_offset) / atlas_size;
+        int uv_y = 9 - (c + ascii_offset) / atlas_size;
         int uv_x = (c + ascii_offset) % atlas_size; 
 
         //bl, br, tr, tl
@@ -251,13 +251,18 @@ void appendVertexData(std::string s, std::vector<float> &vertexes, std::vector<i
         float uv_y_1 = uv_y * uv_partition;
         float uv_y_2 = uv_y * uv_partition + uv_partition;
 
+        //float uv_x_1 = 0;
+        //float uv_x_2 = 1;
+        //float uv_y_1 = 0;
+        //float uv_y_2 = 1;
+
         float pos_x_1 = j;
         float pos_x_2 = j + 1;
         float pos_y_1 = 0;
         float pos_y_2 = 1;
 
-
-        std::vector<int>   new_indices  = { 0, 1, 2, 0, 2, 3 };
+        unsigned int offset = (unsigned int)j*4 + pos*4;
+        std::vector<unsigned int>   new_indices  = { 0 + offset, 1 + offset, 2 + offset, 0 + offset, 2 + offset, 3 + offset};
         std::vector<float> new_vertexes = { pos_x_1, pos_y_2, uv_x_1, uv_y_2,   // bl
                                             pos_x_2, pos_y_2, uv_x_2, uv_y_2,   // br
                                             pos_x_2, pos_y_1, uv_x_2, uv_y_1,   // tr
@@ -266,6 +271,8 @@ void appendVertexData(std::string s, std::vector<float> &vertexes, std::vector<i
 
         vertexes.insert(vertexes.end(), new_vertexes.begin(), new_vertexes.end());
         indexes.insert(indexes.end(), new_indices.begin(),   new_indices.end());
+
+        
 
     }
 
@@ -279,8 +286,10 @@ void refreshTexts(std::string s) {
 
     if (g.r.text_infos.find(s) != g.r.text_infos.end()) { return; }
 
+    log("rebuilding texts...");
+
     std::vector<float> vertexes;
-    std::vector<int>   indexes;
+    std::vector<unsigned int>   indexes;
 
     int final_pos = 0;
 
@@ -292,11 +301,11 @@ void refreshTexts(std::string s) {
         if (info.pos != final_pos) { log("error refreshTexts"); SDL_Quit(); }
         final_pos =+ info.len;
 
-        appendVertexData(name, vertexes, indexes);
+        appendVertexData(name, info.pos, vertexes, indexes);
 
     }
 
-    appendVertexData(s, vertexes, indexes);
+    appendVertexData(s, final_pos, vertexes, indexes);
 
     struct text_info info;
     info.pos = final_pos;
@@ -308,7 +317,7 @@ void refreshTexts(std::string s) {
     glBindVertexArray(0);
 
     glBindBuffer(GL_ARRAY_BUFFER, g.r.textVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, g.r.textEBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.textEBO);
 
     glBufferData(GL_ARRAY_BUFFER,         vertexes.size() * sizeof(float), vertexes.data(), GL_STATIC_DRAW);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()  * sizeof(int),   indexes.data(),  GL_STATIC_DRAW);
@@ -318,7 +327,7 @@ void refreshTexts(std::string s) {
 
 std::vector<std::string> game_strings {
 
-    "PLAY" ,
+    "PLAY",
     "SPLITSCREEN",
     "QUIT",
     "START",
@@ -342,14 +351,15 @@ void initializeTexts() {
     glGenBuffers     (1, &g.r.textEBO);
 
     std::vector<float> vertexes;
-    std::vector<int>   indexes;
+    std::vector<unsigned int>   indexes;
     int pos = 0; 
 
     for (int i = 0; i < game_strings.size(); i++) {
 
         std::string s = game_strings[i];
+        log(s);
 
-        appendVertexData(s, vertexes, indexes);
+        appendVertexData(s, pos, vertexes, indexes);
 
         struct text_info info;
         info.pos = pos;
@@ -358,14 +368,27 @@ void initializeTexts() {
         pos += s.size();
 
         g.r.text_infos[s] = info;
+
+
+
+
     }
+
+    std::cout << vertexes.size() << std::endl;
+    std::cout << indexes.size() << std::endl;
+    std::cout << pos << std::endl;
+
+   
 
     glBindVertexArray(g.r.textVAO);
     glBindBuffer(GL_ARRAY_BUFFER, g.r.textVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, g.r.textEBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.textEBO);
 
-    glBufferData(GL_ARRAY_BUFFER,         vertexes.size() * sizeof(float), vertexes.data(), GL_STATIC_DRAW);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()  * sizeof(int),   indexes.data(),  GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,         vertexes.size() * sizeof(float),        vertexes.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()  * sizeof(unsigned int), indexes.data(),  GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
 
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*) 0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*) (2 * sizeof(float)));
@@ -384,6 +407,7 @@ void initializeTexts() {
 //here we assume we are already in proper text/2d mode/correct shader.
 void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
 
+
     refreshTexts(text);
 
     struct text_info t;
@@ -396,7 +420,11 @@ void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
     }
 
     
+    glActiveTexture(GL_TEXTURE0); 
+    glBindTexture(GL_TEXTURE_2D, g.r.fontAtlasTextureID);
 
+    GLint texLoc = glGetUniformLocation(g.r.programs.at("text2d").pos, "textAtlas");
+    glUniform1i(texLoc, 0);
     try {
         unsigned int pos_loc = g.r.programs.at("text2d").uniform_locations.at("position");
         glUniform2f(pos_loc, x, y);
@@ -409,7 +437,7 @@ void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
         unsigned int size_loc = g.r.programs.at("text2d").uniform_locations.at("size");
         glUniform1i(size_loc, size);
     } catch (const std::out_of_range& e) {
-        log("failed to set pos");
+        log("failed to set size");
         SDL_Quit();
     }
 
@@ -417,15 +445,15 @@ void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
         unsigned int color_loc = g.r.programs.at("text2d").uniform_locations.at("color");
         glUniform3fv(color_loc, 1, (const float*)&color);
     } catch (const std::out_of_range& e) {
-        log("failed to set pos");
-        SDL_Quit();
+        log("failed to set col");
+        //SDL_Quit();
     }
 
     glBindVertexArray(g.r.textVAO); // This could be set outside, 
     // since we are already calling all draw2d at the same time.
-    int num_indices = t.pos * 6;
+    int num_indices = t.len * 6;
     size_t byte_offset = (size_t)t.pos * 6 * sizeof(unsigned int);
-    glDrawElements(GL_TRIANGLES, t.len, GL_UNSIGNED_INT, (void*)byte_offset);
+    glDrawElements(GL_TRIANGLES, num_indices, GL_UNSIGNED_INT, (void*)byte_offset);
 
 
 }
@@ -813,9 +841,17 @@ void initializeFontAtlas() {
     int width;
     int height;
     int nr_channels;
-    unsigned char* data = stbi_load("fontatlas.png", &width, &height, &nr_channels, 4);
+    unsigned char* data = stbi_load("fontatlas.png", &width, &height, &nr_channels, STBI_rgb_alpha);
 
     GLenum format = (nr_channels == 4) ? GL_RGBA : GL_RGB;
+
+    if (nr_channels == 4) { log("Channels: " + std::to_string(nr_channels)); }
+    std::cout << width << " " << height << std::endl;
+
+    if (!data) {
+        log("fk");
+        SDL_Quit();
+    }
 
     glActiveTexture(GL_TEXTURE0);
     glGenTextures(1, &g.r.fontAtlasTextureID);
@@ -824,11 +860,12 @@ void initializeFontAtlas() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     // These maybe should be changed to NEAREST for less blurryness.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, format, GL_UNSIGNED_BYTE, data);           
-    glGenerateMipmap(GL_TEXTURE_2D);
+
 
     stbi_image_free(data);
 }
@@ -1209,13 +1246,13 @@ struct menu_input getMenuInput() {
 
             switch (event.key.key) {
 
-                case SDLK_RETURN:
+                case SDLK_BACKSPACE:
                 case SDLK_ESCAPE: { m_input.back = 1; break; }
 
                 case SDLK_UP:     { m_input.move   =  1; m_input.mouse_active = 0; break;  }
                 case SDLK_DOWN:   { m_input.move   = -1; m_input.mouse_active = 0; break;  }
                 case SDLK_SPACE:
-                case SDLK_KP_ENTER:  { m_input.action =  1; break; }
+                case SDLK_RETURN:  { m_input.action =  1; break; }
 
                 default: { break; } 
             }
@@ -1226,7 +1263,17 @@ struct menu_input getMenuInput() {
             m_input.mouse_x = event.motion.x;
             m_input.mouse_y = event.motion.y; 
             m_input.mouse_active = 1;
-        }   
+        }  
+
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+
+            switch (event.button.button) {
+
+                case SDL_BUTTON_LEFT:  { m_input.action = 1;  m_input.mouse_active = 1; break; }
+
+                default: { break; } 
+            }
+        } 
 
     }
 
@@ -1250,6 +1297,7 @@ struct menu_state {
 
 GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
 
+    log("Yello");
     GameMode gamemode = GameMode::MENU;
 
     int menu_items_count = state.menu_items.size();
@@ -1271,6 +1319,7 @@ GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
     }
 
     if (i.action || i.mouse_active && i.action_mouse) {
+        log("ACTION");
 
         if (state.edit_level) {
 
@@ -1304,11 +1353,11 @@ GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
 
         } else {
 
-            if (state.menu_items[state.active_item] == "PLAY")           { state.play_level = 1; }
+            if (state.menu_items[state.active_item] == "PLAY")           { log("hi"); state.play_level = 1; }
             if (state.menu_items[state.active_item] == "TOGGLE PLAYERS") { state.selected_players = state.selected_players == 1 ? 2 : 1; }
             if (state.menu_items[state.active_item] == "EDIT")           { state.edit_level = 1; }
             if (state.menu_items[state.active_item] == "REFRESH LEVELS") { /*refreshLevels(state); */ }
-            if (state.menu_items[state.active_item] == "QUIT")           { gamemode = GameMode::QUIT; }
+            if (state.menu_items[state.active_item] == "QUIT")           { log("quit press"); gamemode = GameMode::QUIT; }
         }
     }
 
@@ -1341,7 +1390,7 @@ void renderMenu(const struct menu_state &state) {
     glUseProgram(g.r.programs["text2d"].pos);
 
 
-    
+    //vec3_t color = vec3(0, 1, 0);
     for (int i = 0; i < state.menu_items.size(); i++) {
 
         vec3_t color = vec3(1, 1, 1);
@@ -1349,16 +1398,20 @@ void renderMenu(const struct menu_state &state) {
 
             color = vec3(0, 1, 0); 
         }
-
-        drawtext_2d(state.menu_items[i], state.item_space, state.item_space + state.item_space * i, 10, color);
+        drawtext_2d(state.menu_items[i], state.item_space, state.item_space + state.item_space * i, 100, color);
     }
+    
+
+    //for (int i = 0; i < game_strings.size(); i++) {
+        //drawtext_2d(game_strings[i], state.item_space, state.item_space + state.item_space * i, 100, color, i);
+    //}
 
     if (state.edit_level) {
 
         std::string t = "CREATE NEW LEVEL!";
         vec3_t color = vec3(1, 1, 1);
         if (state.active_item == 0) { color = vec3(0, 1, 0); }
-        drawtext_2d(t, state.item_space * 2, state.item_space, 10, color);
+        //drawtext_2d(t, state.item_space * 2, state.item_space, 10, color);
 
         int i = 0;
         for (auto pair : state.levels) {
@@ -1366,14 +1419,14 @@ void renderMenu(const struct menu_state &state) {
             color = vec3(1, 1, 1);
             std::string s = pair.first;
             if (state.active_item == i) { color = vec3(0, 1, 0); }
-            drawtext_2d(s, state.item_space * 2, state.item_space + state.item_space * i, 10, color);
+            //drawtext_2d(s, state.item_space * 2, state.item_space + state.item_space * i, 10, color);
 
         }
 
         std::string b = "RETURN";
         color = vec3(1, 1, 1);
         if (state.active_item == state.levels.size() + 1) { color = vec3(0, 1, 0); }
-        drawtext_2d(b, state.item_space * 2, (state.levels.size() + 2) * state.item_space, 10, color);
+        //drawtext_2d(b, state.item_space * 2, (state.levels.size() + 2) * state.item_space, 10, color);
 
     } else if (state.play_level) {
 
@@ -1383,7 +1436,7 @@ void renderMenu(const struct menu_state &state) {
             vec3_t color = vec3(1, 1, 1);
             std::string s = pair.first;
             if (state.active_item == i) { color = vec3(0, 1, 0); }
-            drawtext_2d(s, state.item_space * 2, state.item_space + state.item_space * i, 10, color);
+            //drawtext_2d(s, state.item_space * 2, state.item_space + state.item_space * i, 10, color);
             i++;
 
         }
@@ -1391,7 +1444,7 @@ void renderMenu(const struct menu_state &state) {
         std::string b = "RETURN";
         vec3_t color = vec3(1, 1, 1);
         if (state.active_item == state.levels.size()) { color = vec3(0, 1, 0); }
-        drawtext_2d(b, state.item_space * 2, (state.levels.size() + 1) * state.item_space, 10, color);
+        //drawtext_2d(b, state.item_space * 2, (state.levels.size() + 1) * state.item_space, 10, color);
 
     }
 
@@ -1412,19 +1465,29 @@ GameMode runMenu(struct menu_result &res) {
 
     struct menu_state state;
     GameMode gamemode = GameMode::MENU;
+    log("inside menu");
 
     while (gamemode == GameMode::MENU) {
 
         struct menu_input i = getMenuInput();
-
+        log("after input");
         gamemode = doMenuLogic(state, i);
+        
+        log("after logic");
         update_fps();
-        limit_fps(30);
+        limit_fps(1);
+        log("after fps");
+
+        checkShaders(g.r.shaders);
+        checkShaderPrograms(g.r.programs, g.r.shaders);
+        cleanShaders(g.r.shaders);
 
         renderMenu(state);
+        log("menu loop");
 
     }
 
+    log("outside menu");
     // Convert important info from state to settings / world? But we also want to throw away stuff...
     //cleanup, if any.
 
@@ -1746,6 +1809,9 @@ int main(int argc, char* argv[]) {
     glViewport(0, 0, g.window_width, g.window_height);
     glClearColor(0.1f, 0.1f, 0.2f, 1.0f); 
 
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     SDL_GL_SetSwapInterval(1); // vsync on
 
 
@@ -1773,14 +1839,17 @@ int main(int argc, char* argv[]) {
     struct play_result play_res;
     struct edit_result edit_res;
 
+    log("HI");
+
     while (gamemode != GameMode::QUIT) {
 
+        log("main loop");
 
         switch (gamemode) {
 
-            case GameMode::MENU: { gamemode = runMenu  (menu_res);   }
-            case GameMode::PLAY: { gamemode = runGame  (play_res, menu_res.l, menu_res.active_players);   }
-            case GameMode::EDIT: { gamemode = runEditor(edit_res, menu_res.l); }
+            case GameMode::MENU: { gamemode = runMenu  (menu_res);                                      break; }
+            case GameMode::PLAY: { gamemode = runGame  (play_res, menu_res.l, menu_res.active_players); break; }
+            case GameMode::EDIT: { gamemode = runEditor(edit_res, menu_res.l);                          break; }
 
         }
 
@@ -1788,6 +1857,7 @@ int main(int argc, char* argv[]) {
     }
 
     // pointless cleanup... but avoids valgrind errors.
+    log("QUIT");
     SDL_GL_DestroyContext(g.glContext);
     SDL_DestroyWindow(g.window);
     SDL_Quit();

@@ -1,8 +1,8 @@
 std::map<std::string, std::pair<std::string, std::string>> program_definitions = {
 
-    { "default", std::make_pair("shaders/default.vs", "shaders/default.fs") },
-    { "text2d",  std::make_pair("shaders/text_2d.vs", "shaders/text_2d.fs") },
-    { "text3d",  std::make_pair("shaders/text_3d.vs", "shaders/text_3d.fs") }
+    { "default", std::make_pair("default.vs", "default.fs") },
+    { "text2d",  std::make_pair("text_2d.vs", "text_2d.fs") },
+    { "text3d",  std::make_pair("text_3d.vs", "text_3d.fs") }
 };
 
 struct shader {
@@ -43,7 +43,6 @@ unsigned int compileShader(std::string s, GLenum type) {
         std::cout << "ERROR - Shader " << source << " compilation failed \n" << infoLog << std::endl;
     }
 
-    std::cout << "returning shader " << s << " with loc: " << shaderLoc << std::endl;
     return shaderLoc;
 
 }
@@ -77,19 +76,17 @@ void setupShaderPrograms(std::map<std::string, struct shader_program> &programs,
     programs.clear();
 
     // Global defined at the top of the file.
-    for (auto s : program_definitions) {
+    for (auto pair : program_definitions) {
 
         struct shader_program p;
-        std::string name = s.first;
-        p.vs   = s.second.first;
-        p.fs   = s.second.second;
+        std::string name = pair.first;
+        p.vs   = pair.second.first;
+        p.fs   = pair.second.second;
 
         p.pos = glCreateProgram();
         glAttachShader(p.pos, shaders[p.vs].pos);
         glAttachShader(p.pos, shaders[p.fs].pos);
         glLinkProgram(p.pos);
-
-        std::cout << shaders[p.fs].pos << std::endl;
 
         int success; 
         char infoLog[512];
@@ -135,6 +132,8 @@ void checkShaderPrograms(std::map<std::string, struct shader_program> &programs,
 
             } else {
 
+                // Look into better solution?
+                glUseProgram(0);
                 glDeleteProgram(sp.pos);
                 sp.pos = temp_pos;
                 update_uniforms(sp);
@@ -175,8 +174,8 @@ void loadShaders(std::map<std::string, struct shader> &shaders) {
         std::ifstream ifs(s.path);
 
         s.source.assign((std::istreambuf_iterator<char>(ifs)), (std::istreambuf_iterator<char>()));
-        if      (s.path[s.path.length() - 2] == 'v') { s.type = GL_VERTEX_SHADER;   }
-        else if (s.path[s.path.length() - 2] == 'f') { s.type = GL_FRAGMENT_SHADER; }
+        if      (s.path[s.path.length() - 2] == 'v') { s.type = GL_VERTEX_SHADER;   s.name += ".vs"; }
+        else if (s.path[s.path.length() - 2] == 'f') { s.type = GL_FRAGMENT_SHADER; s.name += ".fs"; }
         else { continue; }
         s.dirty = false;
         s.last_change = std::time(nullptr);
@@ -224,8 +223,9 @@ void checkShaders(std::map<std::string, struct shader> &shaders) {
 
         struct shader &s = pair.second;
         struct stat file_info;
-        stat(s.source.c_str(), &file_info);
+        stat(s.path.c_str(), &file_info);
         if (file_info.st_mtime > s.last_change) {
+            log("trying to recompile");
             recompileShader(s);
         }
     }
