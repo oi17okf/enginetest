@@ -4,30 +4,4 @@ GOAL:
 100 100 0
 STATIC: // NAME POS SCALE COL
 CUBE 5 5 0  1 1 1   1
-
-
-
-
-
-
 END:
-MOVEABLE: // NAME POS SCALE COL POSX+1 ... POSN 
-CUBE 10 10 0  1 1 1   1   20 10 0 
-
-
-END:
-ENEMIES: // POS
-
-
-
-
-END:
-BOUNCERS:
-
-
-
-END:
-
-
-
-OTHERS:

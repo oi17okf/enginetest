@@ -1,6 +1,8 @@
+// This file serves as the level directory. To create a new level, simply add a line here. Column #1 is the levelName, #2 file name(s) saved data will be stored in. Rest are medal times.
 Level1 level1       50 20 10
 Level2 level2       50 20 10
 Level3 level3       50 20 10
 Level4 level4       50 20 10
 TestLevel testlevel 50 20 10
+
 

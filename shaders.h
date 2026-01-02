@@ -1,6 +1,7 @@
 std::map<std::string, std::pair<std::string, std::string>> program_definitions = {
 
     { "default", std::make_pair("default.vs", "default.fs") },
+    { "terrain", std::make_pair("terrain.vs", "terrain.fs") },
     { "text2d",  std::make_pair("text_2d.vs", "text_2d.fs") },
     { "text3d",  std::make_pair("text_3d.vs", "text_3d.fs") }
 };
