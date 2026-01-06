@@ -109,6 +109,8 @@ struct render_globals {
     GLUint terrainVAO, terrainVBO, terrainEBO;
     int terrain_indices;
 
+    std::map<std::string, struct renderable> renderables;
+    std::map<std::string, struct AABB> collisions;
     std::map<std::string, struct text_info> text_infos;
     std::map<std::string, struct shader> shaders;
     std::map<std::string, struct shader_program> programs;
@@ -225,7 +227,7 @@ struct level_info {
     vec3_t start_pos;
     vec3_t goal_pos;
 
-    std::vector<struct static_object>
+    std::vector<struct static_object> statics;
 
 };
 
@@ -520,6 +522,7 @@ void draw_3d_text(std::string s, int x, int y, int size, color c) {
 
 }
 
+*/
 
 struct renderable {
 
@@ -527,17 +530,19 @@ struct renderable {
     unsigned int VBO;
     unsigned int EBO;
     int size;
+
 };
 
 struct AABB {
 
-    int min;
-    int max;
-    int center;
+    vec3_t min;
+    vec3_t max;
+    vec3_t center;
+
 };
 
 
-*/
+
 // we could calc color from height...
 struct terrain {
 
@@ -918,10 +923,31 @@ void initializeFontAtlas() {
     stbi_image_free(data);
 }
 
-/* 
+// assume shader program is set
+void renderObj(std::string name) {
+
+    struct renderable r = g.r.renderables[name];
+
+    glBindVertexArray(r.VAO);
+
+    glDrawElements(GL_TRIANGLES, r.size, GL_UNSIGNED_INT, (void*)0);
+
+}
+
+void renderStatic(struct static_obj &obj) {
+
+
+    // set pos uniform
+    // set scale uniform
+
+    // set texture if any
+
+
+    renderObj(obj.name);
+}
+
 std::map<std::string, struct renderable> loadAllObjs() {
 
-    std::map<std::string, struct renderable> loadedObjs;
     std::map<std::string, struct AABB> loadedAABBS;
 
     if (!std::filesystem::exists(objectDir) || !std::filesystem::is_directory(objectDir)) {
@@ -939,63 +965,112 @@ std::map<std::string, struct renderable> loadAllObjs() {
 
         std::string line;
 
-        std::string fileName = entry.path().stem().string();
+        std::string name;
 
-        std::vector<float> vertexes;
-        std::vector<float> uvs;
-        std::vector<float> normals;
+        std::vector<vec3_t> vertexes;
+        std::vector<vec2_t> uvs;
+        std::vector<vec3_t> normals;
 
-        std::set<std::tuple<int, int, int> keys;
+        std::set<std::tuple<int, int, int> found_keys;
         std::vector<int> indexes;
+        std::vector<float> vbo_data;
 
         struct AABB col;
-        col.min = INT_MAX;
-        col.max = INT_MIN;
+        col.min = vec3(INT_MAX, INT_MAX, INT_MAX);
+        col.max = vec3(INT_MIN, INT_MIN, INT_MIN);
+
+        // This is all a bit stupid... but i am tired...
 
         while(std::getline(file, line)) {
 
             std::stringstream ss(line);
-            std::vector<std::string> tokens;
-            std::string token;
-            while (ss >> token) { tokens.push_back(token); }
+            std::string linetype;
 
-            if (tokens[0] == "v" && tokens.size() == 4) { // conv to helper func
+            if (!(ss >> linetype)) { continue; }
 
-                vertexes.push_back(tokens[1]); 
-                vertexes.push_back(tokens[2]); 
-                vertexes.push_back(tokens[3]); 
+            if (linetype == "o") { ss >> name; }
 
-                // For AABB
-                // Extract vector
-                // Compare each point of vertex w each point of min and max
-                // if lower, update min, if higher, update max;
+            if (linetype == "v") { // This is horrible. So error prone...
+
+                float vx, vy, vz = 0.0f;
+                ss >> vx >> vy >> vz;
+
+                col.min.x = vx < col.min.x ? vx : col.min.x;
+                col.max.x = vx > col.max.x ? vx : col.max.x;
+
+                col.min.y = vy < col.min.y ? vy : col.min.y;
+                col.max.y = vy > col.max.y ? vy : col.max.y;
+
+                col.min.z = vz < col.min.z ? vz : col.min.z;
+                col.max.z = vz > col.max.z ? vz : col.max.z;
+
+                vec3_t pos = vec3(vx, vy, vz);
+                vertexes.push_back(pos);
+      
             }
 
-            if (tokens[0] == "vt" && tokens.size() == 3) { 
+            if (linetype == "vt") { 
 
-                uvs.push_back(tokens[1]); 
-                uvs.push_back(tokens[2]);  
+                float uvx, uvy = 0.0f;
+                ss >> uvx >> uvy;
+                vec2_t uv = vec2(uvx, uvy);
+                uvs.push_back(uv);  
             }
 
-            if (tokens[0] == "vn" && tokens.size() == 4) { 
+            if (linetype == "vn") { 
 
-                normals.push_back(tokens[1]); 
-                normals.push_back(tokens[2]); 
-                normals.push_back(tokens[3]); 
+                float nx, ny, nz = 0.0f;
+                ss >> nx >> ny >> nz;
+                vec3_t normal = vec3(nx, ny, nz);
+                normals.push_back(normal); 
+
             }
 
-            if (tokens[0] == "f" && tokens.size() == 4) { 
+            if (linetype == "f") { 
 
-                for (int i = 1; i <= 3; i++) {
+                std::string faces[3];
+                ss >> faces[0] >> faces[1] >> faces[2];
 
-                    std::tuple<int, int, int> index = extractIndices(tokens[i]);
-                    if (keys.find(index)) { indexes.push_back(found_key); } 
-                    else                  { keys.push_back(index); indexes.push_back(keys.size()); }
+                for (int i = 0; i < 3; i++) {
+
+                    std::stringstream sss(faces[i]);
+                    char slash;
+                    int v, t, n;
+                    sss >> v >> slash >> t >> slash >> n;
+                    std::tuple<int, int, int> index = std::make_tuple(v, t, n);
+
+                    auto it = found_keys.find(index);
+
+                    if (it != found_keys.end()) { 
+
+                        int key_index = std::distance(found_keys.begin(), it);
+                        indexes.push_back(key_index); 
+
+                    } else { 
+
+                        found_keys.push_back(index); 
+                        indexes.push_back(keys.size()); 
+
+                        vec3_t pos    = vertexes[v];
+                        vec2_t uv     = uvs[t];
+                        vec3_t normal = normals[n];
+
+                        vbo_data.push_back(pos.x);
+                        vbo_data.push_back(pos.y);
+                        vbo_data.push_back(pos.z);
+
+                        vbo_data.push_back(uv.x);
+                        vbo_data.push_back(uv.y);
+
+                        vbo_data.push_back(normal.x);
+                        vbo_data.push_back(normal.y);
+                        vbo_data.push_back(normal.z);
+                    }
                 }
             }
         }
 
-        col.mid = (col.max + col.min) / 2;
+        col.mid = vec3((col.max.x + col.min.x) / 2, (col.max.y + col.min.y) / 2, (col.max.z + col.min.z) / 2);
 
         unsigned int VBO, EBO, VAO;
         glGenVertexArrays(1, &VAO); 
@@ -1006,8 +1081,12 @@ std::map<std::string, struct renderable> loadAllObjs() {
         glBindBuffer     (GL_ARRAY_BUFFER, VBO);
         glBindBuffer     (GL_ELEMENT_ARRAY_BUFFER, EBO);  
 
-        glBufferData(GL_ARRAY_BUFFER,         sizeof(vertices), vertices, GL_STATIC_DRAW); // unique vertex data
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),  indices,  GL_STATIC_DRAW); // indices
+        glBufferData(GL_ARRAY_BUFFER,         vbo_data.size() * sizeof(float),        vbo_data.data(), GL_STATIC_DRAW); // unique vertex data
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()  * sizeof(unsigned int), indexes.data(),  GL_STATIC_DRAW); // indices
+
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glEnableVertexAttribArray(2);
 
         // pos, dim, type, normalized, stride, offset
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*) 0);
@@ -1020,16 +1099,16 @@ std::map<std::string, struct renderable> loadAllObjs() {
         r.VAO = VAO;
         r.VBO = VBO;
         r.EBO = EBO;
-        r.size = keys.size();
+        r.size = indexes.size();
 
-        loadedObjs[fileName] = r;
+        g.r.collisions[name]  = col;
+        g.r.renderables[name] = r;
 
     }
 
-    return loadedObjs;
 }
 
-*/
+
 
 // Out game will max have 16 textures, so it makes sense to just load all of them at startup and leave them on the GPU
 // TODO: FIX
@@ -1229,8 +1308,8 @@ int loadStatics(struct level_info &l, std::ifstream &level_file) {
             log("error loading static object");
             return -1;
         } 
-
-        static_vector.push_back(o);
+        l.
+        l.statics.push_back(o);
     }
 
     return 0;
