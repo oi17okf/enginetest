@@ -10,7 +10,7 @@
 
 #define MATH_3D_IMPLEMENTATION
 extern "C" {
-#include "math_3d.h"
+    #include "math_3d.h"
 }
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -61,7 +61,6 @@ static inline radians(float deg) { return deg * M_PI / 180.0f; }
 // update plan after this
 
 
-
 // ACTION SYSTEM ACTIONS - Z or X is used in conjunction with mouse.
 // TAB or SHIFT_TAB is used to shift between modes.
 // Objects pos, scale, rot is changed by modifying text file for simplicity sake
@@ -82,24 +81,16 @@ switch on mouse ray hit
 */
 
 
-
-// X. validate loadAllObjs file
-// Z. manually create a level by writing in text file.
-// Y. split into proper functions/files
-
-
-
-
-
 #define DEFAULT_WINDOW_WIDTH  640
 #define DEFAULT_WINDOW_HEIGHT 480
 
 
-struct text_info {
-
-    int pos;
-    int len;
-};
+struct text_info  { int pos; 
+                    int len; };
+struct renderable { unsigned int VAO, VBO, EBO; 
+                    int size; };
+struct AABB       { vec3_t min, max, center; };
+struct texture    { int slot, id; }
 
 struct render_globals {
 
@@ -109,12 +100,11 @@ struct render_globals {
     GLUint terrainVAO, terrainVBO, terrainEBO;
     int terrain_indices;
 
-    std::map<std::string, struct renderable> renderables;
-    std::map<std::string, struct AABB> collisions;
-    std::map<std::string, struct text_info> text_infos;
-    std::map<std::string, struct shader> shaders;
+    std::map<std::string, struct renderable>     renderables;
+    std::map<std::string, struct text_info>      text_infos;
+    std::map<std::string, struct shader>         shaders;
     std::map<std::string, struct shader_program> programs;
-    std::map<std::string, GLuint> textures;
+    std::map<std::string, struct texture>        textures;
 
 
 };
@@ -134,82 +124,23 @@ struct globals {
     SDL_Window*   window;
     SDL_GLContext glContext;
 
+    std::map<std::string, struct AABB> collisions; // global collisions.
+
     struct render_globals r;
 };
 
 struct globals g;
 
+struct static_object {
 
-// This can be updated to use SDL_GetPerformanceCounter() 
-// && SDL_GetPerformanceFrequency() if needed.
-void update_fps() {
+    std::string mesh_name; // use this to find what to render.
+    std::string texture_name; // what texture to use when rendering
+    vec3_t pos;
+    vec3_t scale;
 
-    unsigned int current_frame = SDL_GetTicks();
-    unsigned int ms_since_last_frame = (float)(current_frame - g.last_frame_timestamp);
-
-    g.delta_time = ms_since_last_frame / 1000; 
-    g.fps = 1.0f / g.delta_time;
-    g.last_frame_timestamp = current_frame;
-}
-
-void limit_fps(int fps_cap) {
-
-    float needed_delta = 1.0f / (float)fps_cap;
-
-    if (g.delta_time < needed_delta) {
-        SDL_Delay((needed_delta - g.delta_time) * 1000 );
-    }
-}
-
-enum class GameMode { INIT, MENU, PLAY, EDIT, QUIT };
-
-
-struct simple_mesh_data {
-
-    std::string texture;
-    std::string obj;
+    int has_collision;
 
 };
-
-struct complex_mesh_data {
-
-    std::string tex1;
-    std::string tex2;
-    std::string obj;
-    std::string shader_vs;
-    std::string shader_fs;
-
-};
-
-
-void clamp(int &val, int min, int max, int wrap) {
-
-    if (val < min && wrap) { val = max; }
-    if (val < min)         { val = min; }
-    if (val > max && wrap) { val = min; }
-    if (val > max)         { val = max; }
-
-}
-
-void clamp(float &val, int min, int max, int wrap) {
-
-    if (val < min && wrap) { val = max; }
-    if (val < min)         { val = min; }
-    if (val > max && wrap) { val = min; }
-    if (val > max)         { val = max; }
-
-}
-
-/*std::map<std::string name, simple_mesh_data> simple_mesh_map {
-
-    { "cube",   { "cube_tex",  "cube.obj" }   },
-    { "goomba", { "oomba_tex", "goomba.obj" } },
-    { "roomba", { "oomba_tex", "roomba.obj" } },
-    { "bench",  { "bench_tex", "bench.obj" }  },
-    { "sword",  { "texture",   "sword.obj" }  },
-
-};
-*/
 
 struct level_info {
 
@@ -231,26 +162,79 @@ struct level_info {
 
 };
 
+enum class GameMode { INIT, MENU, PLAY, EDIT, QUIT };
 
-//list of bound textures
-//specific bound texture for text rendering
+void clamp(int &val, int min, int max, int wrap) {
+
+    if (val < min && wrap) { val = max; }
+    if (val < min)         { val = min; }
+    if (val > max && wrap) { val = min; }
+    if (val > max)         { val = max; }
+
+}
+
+void clamp(float &val, int min, int max, int wrap) {
+
+    if (val < min && wrap) { val = max; }
+    if (val < min)         { val = min; }
+    if (val > max && wrap) { val = min; }
+    if (val > max)         { val = max; }
+
+}
+
+static inline update_shader_uniform(std::string shader, std::string uniform, int val, std::string err_msg) {
+
+    try {
+        unsigned int loc = g.r.programs.at(shader).uniform_locations.at(uniform);
+        glUniform1i(size_loc, val);
+    } catch (const std::out_of_range& e) {
+        log(err_msg);
+        SDL_Quit();
+    }
+}
+
+static inline update_shader_uniform(std::string shader, std::string uniform, mat4_t val) {
+
+    try {
+        unsigned int loc = g.r.programs.at(shader).uniform_locations.at(uniform);
+        glUniformMatrix4fv(loc, 1, GL_FALSE, (float*) &val);
+    } catch (const std::out_of_range& e) {
+        log("failed to update " + uniform + " in program " + shader);
+        SDL_Quit();
+    }
+}
+
+static inline setActiveProgram(std::string program) {
+
+    unsigned int p = g.r.programs[program].pos;
+    glUseProgram(p);
+    
+}
 
 
-struct static_object {
+// This can be updated to use SDL_GetPerformanceCounter() 
+// && SDL_GetPerformanceFrequency() if needed.
+void update_fps() {
 
-    std::string mesh_name; // use this to find what to render.
-    vec3_t pos;
-    vec3_t scale;
+    unsigned int current_frame = SDL_GetTicks();
+    unsigned int ms_since_last_frame = (float)(current_frame - g.last_frame_timestamp);
 
-    int has_collision;
+    g.delta_time = ms_since_last_frame / 1000; 
+    g.fps = 1.0f / g.delta_time;
+    g.last_frame_timestamp = current_frame;
+}
 
-    // texture could also be stored w name? since they exist in hashmap anyway...
-    // texture id - someway to signal which texture to use, for now just do default.
+void limit_fps(int fps_cap) {
 
-    // actual collision
-    //struct* collision c = nullptr;
+    float needed_delta = 1.0f / (float)fps_cap;
 
-};
+    if (g.delta_time < needed_delta) {
+
+        SDL_Delay((needed_delta - g.delta_time) * 1000 );
+    }
+}
+
+
 
 void initializeTimerRenderer() {
 
@@ -292,7 +276,7 @@ void appendVertexData(std::string s, int pos, std::vector<float> &vertexes, std:
         float pos_y_1 = 0;
         float pos_y_2 = 1;
 
-        unsigned int offset = (unsigned int)j*4 + pos*4;
+        unsigned int offset = (unsigned int)j * 4 + pos * 4;
         std::vector<unsigned int>   new_indices  = { 0 + offset, 1 + offset, 2 + offset, 0 + offset, 2 + offset, 3 + offset};
         std::vector<float> new_vertexes = { pos_x_1, pos_y_2, uv_x_1, uv_y_2,   // bl
                                             pos_x_2, pos_y_2, uv_x_2, uv_y_2,   // br
@@ -303,14 +287,9 @@ void appendVertexData(std::string s, int pos, std::vector<float> &vertexes, std:
         vertexes.insert(vertexes.end(), new_vertexes.begin(), new_vertexes.end());
         indexes.insert(indexes.end(), new_indices.begin(),   new_indices.end());
 
-        
-
     }
-
 }
  
-
-
 // poor name but HEY
 // also early return but no police here
 void refreshTexts(std::string s) {
@@ -356,26 +335,15 @@ void refreshTexts(std::string s) {
 
 }
 
-std::vector<std::string> game_strings {
-
-    "PLAY",
-    "SPLITSCREEN",
-    "QUIT",
-    "START",
-    "GOAL",
-    "ENEMY",
-    "RETURN",
-    "CREATE NEW LEVEL!",
-    "TOGGLE PLAYERS",
-    "EDIT",
-    "REFRESH LEVELS",
-    "LEVEL1",
-    "LEVEL2",
-    "LEVEL3"
-
-};
 
 void initializeTexts() {
+
+    std::vector<std::string> game_strings {
+
+        "PLAY", "SPLITSCREEN", "QUIT", "START", "GOAL", "ENEMY", "RETURN",
+        "CREATE NEW LEVEL!", "TOGGLE PLAYERS", "EDIT", "REFRESH LEVELS",
+        "LEVEL1", "LEVEL2", "LEVEL3"
+    };
 
     glGenVertexArrays(1, &g.r.textVAO);
     glGenBuffers     (1, &g.r.textVBO);
@@ -400,9 +368,6 @@ void initializeTexts() {
 
         g.r.text_infos[s] = info;
 
-
-
-
     }
 
     std::cout << vertexes.size() << std::endl;
@@ -410,7 +375,6 @@ void initializeTexts() {
     std::cout << pos << std::endl;
 
    
-
     glBindVertexArray(g.r.textVAO);
     glBindBuffer(GL_ARRAY_BUFFER, g.r.textVBO);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.textEBO);
@@ -524,22 +488,7 @@ void draw_3d_text(std::string s, int x, int y, int size, color c) {
 
 */
 
-struct renderable {
 
-    unsigned int VAO;
-    unsigned int VBO;
-    unsigned int EBO;
-    int size;
-
-};
-
-struct AABB {
-
-    vec3_t min;
-    vec3_t max;
-    vec3_t center;
-
-};
 
 
 
@@ -939,9 +888,10 @@ void renderStatic(struct static_obj &obj) {
 
     // set pos uniform
     // set scale uniform
+    // or just do model directly.
 
-    // set texture if any
-
+    int texture_slot = g.r.textures[obj.texture_name];
+    update_shader_uniform("default", "textureID", texture_slot);
 
     renderObj(obj.name);
 }
@@ -1111,7 +1061,7 @@ std::map<std::string, struct renderable> loadAllObjs() {
 
 
 // Out game will max have 16 textures, so it makes sense to just load all of them at startup and leave them on the GPU
-// TODO: FIX
+
 void loadAllTextures() {
 
     
@@ -1290,7 +1240,7 @@ int loadStart(struct level_info &l, std::ifstream &level_file) {
     return 0;
 }
 
-//ugly
+// ugly (unlike you, dear student)
 int loadStatics(struct level_info &l, std::ifstream &level_file) {
 
     std::string line;
@@ -1304,19 +1254,17 @@ int loadStatics(struct level_info &l, std::ifstream &level_file) {
 
         struct static_object o;
         o.mesh_name = first_word;
-        if (!(ss >> o.pos.x >> o.pos.y >> o.pos.z >> o.scale.x >> o.scale.y >> o.scale.z >> o.has_collision)) { 
+        if (!(ss >> o.texture_name >> o.pos.x >> o.pos.y >> o.pos.z >> o.scale.x >> o.scale.y >> o.scale.z >> o.has_collision)) { 
             log("error loading static object");
             return -1;
         } 
-        l.
+        
         l.statics.push_back(o);
     }
 
     return 0;
 
 }
-
-
 
 
 void loadLevelDetails(struct level_info &l, std::string file_name) {
@@ -1843,34 +1791,6 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
     return GameMode::PLAY;
 }
 
-static inline update_shader_uniform(std::string shader, std::string uniform, int val, std::string err_msg) {
-
-    try {
-        unsigned int loc = g.r.programs.at(shader).uniform_locations.at(uniform);
-        glUniform1i(size_loc, val);
-    } catch (const std::out_of_range& e) {
-        log(err_msg);
-        SDL_Quit();
-    }
-}
-
-static inline update_shader_uniform(std::string shader, std::string uniform, mat4_t val) {
-
-    try {
-        unsigned int loc = g.r.programs.at(shader).uniform_locations.at(uniform);
-        glUniformMatrix4fv(loc, 1, GL_FALSE, (float*) &val);
-    } catch (const std::out_of_range& e) {
-        log("failed to update " + uniform + " in program " + shader);
-        SDL_Quit();
-    }
-}
-
-static inline setActiveProgram(std::string program) {
-
-    unsigned int p = g.r.programs[program].pos;
-    glUseProgram(p);
-    
-}
 
 void renderTerrain() {
 
