@@ -2,6 +2,7 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <vector>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -30,6 +31,7 @@ const std::string objectDir    = "objects\\";
 const std::string terrainDir   = "saves\\terrains\\";
 const std::string shaderDir    = "shaders\\";
 const std::string detailsDir   = "saves\\details\\";
+const std::string timesDir   = "saves\\times\\";
 const std::string dataDir      = "data\\";
 const std::string atlasLoc     = "fontatlas.png";
 const std::string levelDataloc = "data\\leveltimes.txt";
@@ -61,6 +63,8 @@ static inline radians(float deg) { return deg * M_PI / 180.0f; }
 // update plan after this
 
 
+// frustrum culling?
+
 // ACTION SYSTEM ACTIONS - Z or X is used in conjunction with mouse.
 // TAB or SHIFT_TAB is used to shift between modes.
 // Objects pos, scale, rot is changed by modifying text file for simplicity sake
@@ -89,15 +93,15 @@ struct text_info  { int pos;
                     int len; };
 struct renderable { unsigned int VAO, VBO, EBO; 
                     int size; };
-struct AABB       { vec3_t min, max, center; };
-struct texture    { int slot, id; }
+struct AABB       { vec3_t min, max, mid; };
+struct texture    { int slot, id; };
 
 struct render_globals {
 
     GLuint fontAtlasTextureID = 0;
     GLuint textVAO, textVBO, textEBO;
 
-    GLUint terrainVAO, terrainVBO, terrainEBO;
+    GLuint terrainVAO, terrainVBO, terrainEBO;
     int terrain_indices;
 
     std::map<std::string, struct renderable>     renderables;
@@ -142,6 +146,21 @@ struct static_object {
 
 };
 
+// we could calc color from height...
+struct terrain {
+
+    int size;
+
+    // these are both bpp = 4, to make writing / reading simpler.
+    std::vector<unsigned char> colors; // Allows for simple editing
+    std::vector<unsigned char> height; // Same but also used for collision
+
+    int dirty = 0; //could be used as index, if we only change 1 height vert at a time.
+    // Otherwise make a vector of changed vertices.
+    std::string name;
+
+};
+
 struct level_info {
 
     std::string visual_name;
@@ -182,18 +201,18 @@ void clamp(float &val, int min, int max, int wrap) {
 
 }
 
-static inline update_shader_uniform(std::string shader, std::string uniform, int val, std::string err_msg) {
+static inline void update_shader_uniform(std::string shader, std::string uniform, int val) {
 
     try {
         unsigned int loc = g.r.programs.at(shader).uniform_locations.at(uniform);
-        glUniform1i(size_loc, val);
+        glUniform1i(loc, val);
     } catch (const std::out_of_range& e) {
-        log(err_msg);
+        log("failed to update " + uniform + " in program " + shader);
         SDL_Quit();
     }
 }
 
-static inline update_shader_uniform(std::string shader, std::string uniform, mat4_t val) {
+static inline void update_shader_uniform(std::string shader, std::string uniform, mat4_t val) {
 
     try {
         unsigned int loc = g.r.programs.at(shader).uniform_locations.at(uniform);
@@ -204,7 +223,7 @@ static inline update_shader_uniform(std::string shader, std::string uniform, mat
     }
 }
 
-static inline setActiveProgram(std::string program) {
+static inline void setActiveProgram(std::string program) {
 
     unsigned int p = g.r.programs[program].pos;
     glUseProgram(p);
@@ -265,11 +284,6 @@ void appendVertexData(std::string s, int pos, std::vector<float> &vertexes, std:
         float uv_x_2 = uv_x * uv_partition + uv_partition;
         float uv_y_1 = uv_y * uv_partition;
         float uv_y_2 = uv_y * uv_partition + uv_partition;
-
-        //float uv_x_1 = 0;
-        //float uv_x_2 = 1;
-        //float uv_y_1 = 0;
-        //float uv_y_2 = 1;
 
         float pos_x_1 = j;
         float pos_x_2 = j + 1;
@@ -394,11 +408,6 @@ void initializeTexts() {
 }
 
 
-
-
-
-
-
 //here we assume we are already in proper text/2d mode/correct shader.
 void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
 
@@ -491,33 +500,21 @@ void draw_3d_text(std::string s, int x, int y, int size, color c) {
 
 
 
-
-// we could calc color from height...
-struct terrain {
-
-    int size;
-
-    std::vector<unsigned char> colors; // Allows for simple editing
-    std::vector<unsigned char> height; // Same but also used for collision
-
-    int dirty = 0; //could be used as index, if we only change 1 height vert at a time.
-    // Otherwise make a vector of changed vertices.
-    std::string name;
-
-}
-
-
 void loadTerrain(struct level_info &l, std::string file_name) {
 
     int width;
     int height;
     int nr_channels;
 
-    unsigned char* data = stbi_load(terrainDir + file_name + "_color.png", &width, &height, &nr_channels, STBI_rgb_alpha);
+    unsigned char* data;
+
+    std::string terrain_color = terrainDir + file_name + "_color.png";
+    data = stbi_load(terrain_color.c_str(), &width, &height, &nr_channels, STBI_rgb_alpha);
     l.t.colors.assign(data, data + (width * height * nr_channels));
     stbi_image_free(data);
 
-    unsigned char* data = stbi_load(terrainDir + file_name + "_height.png", &width, &height, &nr_channels, STBI_rgb_alpha);
+    std::string terrain_height = terrainDir + file_name + "_height.png";
+    data = stbi_load(terrain_height.c_str(), &width, &height, &nr_channels, STBI_rgb_alpha);
     l.t.height.assign(data, data + (width * height * nr_channels));
     stbi_image_free(data);
 
@@ -533,13 +530,13 @@ void loadTerrain(struct level_info &l, std::string file_name) {
 
 void initTerrain() {
 
-    glGenVertexArrays(1, &g.r.terrain.VAO);
-    glGenBuffers     (1, &g.r.terrain.VBO);
-    glGenBuffers     (1, &g.r.terrain.EBO);
+    glGenVertexArrays(1, &g.r.terrainVAO);
+    glGenBuffers     (1, &g.r.terrainVBO);
+    glGenBuffers     (1, &g.r.terrainEBO);
 
-    glBindVertexArray(g.r.terrain.VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, g.r.terrain.VBO);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.terrain.EBO);
+    glBindVertexArray(g.r.terrainVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g.r.terrainVBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.terrainEBO);
 
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
@@ -578,9 +575,9 @@ void uploadTerrain(struct level_info &l, int editMode) {
             vertex.push_back(i * -grid_size); // Y, grow down.
             vertex.push_back(height);
 
-            float r = (float)l.t.color[(i * width + j) * bpp];
-            float g = (float)l.t.color[(i * width + j) * bpp + 1];
-            float b = (float)l.t.color[(i * width + j) * bpp + 2];
+            float r = (float)l.t.colors[(i * width + j) * bpp];
+            float g = (float)l.t.colors[(i * width + j) * bpp + 1];
+            float b = (float)l.t.colors[(i * width + j) * bpp + 2];
 
             vertex.push_back(r); 
             vertex.push_back(g);
@@ -610,9 +607,9 @@ void uploadTerrain(struct level_info &l, int editMode) {
 
     }
 
-    glBindVertexArray(g.r.VAO); // we could skip this if we assumed no vao is bound.
-    glBindBuffer(GL_ARRAY_BUFFER, g.r.VBO);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.EBO);
+    glBindVertexArray(g.r.terrainVAO); // we could skip this if we assumed no vao is bound.
+    glBindBuffer(GL_ARRAY_BUFFER, g.r.terrainVBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.terrainEBO);
 
     GLenum buffer_type = editMode ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
 
@@ -625,14 +622,14 @@ void uploadTerrain(struct level_info &l, int editMode) {
 
 }
 
-void generateDefaultTerrain(file_name) {
+void generateDefaultTerrain(std::string file_name) {
 
     const int width    = 512;
     const int height   = 512;
     const int channels = 4; 
 
     std::vector<unsigned char> colors(width * height * channels);
-    std::vector<unsigned char> height(width * height * channels);
+    std::vector<unsigned char> heights(width * height * channels);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -645,15 +642,15 @@ void generateDefaultTerrain(file_name) {
             colors[i + 2] = 128;                      
             colors[i + 3] = 255;    
 
-            height[i + 0] = 128; 
-            height[i + 1] = 128; 
-            height[i + 2] = 128;                      
-            height[i + 3] = 255;                     
+            heights[i + 0] = 128; 
+            heights[i + 1] = 128; 
+            heights[i + 2] = 128;                      
+            heights[i + 3] = 255;                     
         }
     }
 
-    stbi_write_png(terrainDir + file_name + "_color.png",  width, height, channels, colors.data(), width * channels);
-    stbi_write_png(terrainDir + file_name + "_height.png", width, height, channels, height.data(), width * channels);
+    stbi_write_png((terrainDir + file_name + "_color.png").c_str(),  width, height, channels, colors.data(),  width * channels);
+    stbi_write_png((terrainDir + file_name + "_height.png").c_str(), width, height, channels, heights.data(), width * channels);
 }
 
 
@@ -666,12 +663,12 @@ void checkTerrain(struct level_info &l, std::string file_name) {
     
     std::ifstream terrain_file(terrainDir + file_name + "_color.png");
 
-    if (!file.good()) {
+    if (!terrain_file.good()) {
 
         generateDefaultTerrain(file_name);
     } else {
 
-        file.close();
+        terrain_file.close();
     }
 
     loadTerrain(l, file_name);
@@ -692,7 +689,7 @@ struct special_ingame_object {
 
 
     struct object* location;
-}
+};
 
 
 struct camera {
@@ -722,49 +719,34 @@ struct player {
     float can_jump;
 
     struct camera cam;
-    struct timer t;
+    float timer;
 
 };
 
-struct player_input {
-
-    float move_x       = 0;
-    float move_y       = 0;
-    int   jump         = 0;
-    int   floating     = 0;
-    int   dash         = 0;
-    int   punch        = 0;
-    float rotate_cam_x = 0.0f;
-    float rotate_cam_y = 0.0f;
-    float zoom         = 0.0f;
-
-    int restart = 0;
-    int quit    = 0;
-};
 
 void update_player(struct player_input& i, struct player& p) {
 
 
 
-    last_frame_pos = player.pos;
+   // last_frame_pos = player.pos;
 
 
     // should we rotate camera first? not sure what impact is has on gameplay...
 
 
     // update move based on either yaw or pitch.
-    acc.x = cosf(pitch); //something like this.
-    acc.z = sinf(pitch);
+    //acc.x = cosf(pitch); //something like this.
+    //acc.z = sinf(pitch);
 
 
-    acc += i.move_x
-    vel += acc;
-    pos += vel;
+    //acc += i.move_x
+    //vel += acc;
+    //pos += vel;
 
     // https://www.youtube.com/watch?v=j_bTClbcCao
     // bilinear interp
     // check collision with terrain, just z compared with heightmap to make super mario type of level.
-    const grid_size = 1.0f;
+    const int grid_size = 1.0f;
 
     int x;
 
@@ -791,6 +773,8 @@ void update_player(struct player_input& i, struct player& p) {
 
 // all structs have both their gameplay values and their rendering values, 
 // should usually just be uniforms though.
+
+/* 
 struct moving_enemy {
 
     vec3_t base_pos;
@@ -820,14 +804,7 @@ void update_moving_enemies() {
 
 }
 
-void update_spline_enemies() {
-
-    for all:
-        move along spline;
-}
-
-
-
+*/
 
 // implement Draw Call Reordering 
 
@@ -843,7 +820,7 @@ void initializeFontAtlas() {
     int width;
     int height;
     int nr_channels;
-    unsigned char* data = stbi_load(atlasLoc, &width, &height, &nr_channels, STBI_rgb_alpha);
+    unsigned char* data = stbi_load(atlasLoc.c_str(), &width, &height, &nr_channels, STBI_rgb_alpha);
 
     GLenum format = (nr_channels == 4) ? GL_RGBA : GL_RGB;
 
@@ -883,20 +860,20 @@ void renderObj(std::string name) {
 
 }
 
-void renderStatic(struct static_obj &obj) {
+void renderStatic(struct static_object &obj) {
 
 
     // set pos uniform
     // set scale uniform
     // or just do model directly.
 
-    int texture_slot = g.r.textures[obj.texture_name];
-    update_shader_uniform("default", "textureID", texture_slot);
+    struct texture t = g.r.textures[obj.texture_name];
+    update_shader_uniform("default", "textureID", t.slot);
 
-    renderObj(obj.name);
+    renderObj(obj.mesh_name);
 }
 
-std::map<std::string, struct renderable> loadAllObjs() {
+void loadAllObjs() {
 
     std::map<std::string, struct AABB> loadedAABBS;
 
@@ -911,17 +888,17 @@ std::map<std::string, struct renderable> loadAllObjs() {
 
         std::ifstream file(entry.path());
 
-        if (!file.is_open()) { log("failed to open " + entry.path()); continue; }
+        if (!file.is_open()) { log("failed to open " + entry.path().string()); continue; }
 
         std::string line;
 
         std::string name;
 
         std::vector<vec3_t> vertexes;
-        std::vector<vec2_t> uvs;
+        std::vector<vec3_t> uvs;
         std::vector<vec3_t> normals;
 
-        std::set<std::tuple<int, int, int> found_keys;
+        std::set<std::tuple<int, int, int>> found_keys;
         std::vector<int> indexes;
         std::vector<float> vbo_data;
 
@@ -963,7 +940,7 @@ std::map<std::string, struct renderable> loadAllObjs() {
 
                 float uvx, uvy = 0.0f;
                 ss >> uvx >> uvy;
-                vec2_t uv = vec2(uvx, uvy);
+                vec3_t uv = vec3(uvx, uvy, 0);
                 uvs.push_back(uv);  
             }
 
@@ -998,11 +975,11 @@ std::map<std::string, struct renderable> loadAllObjs() {
 
                     } else { 
 
-                        found_keys.push_back(index); 
-                        indexes.push_back(keys.size()); 
+                        found_keys.insert(index); 
+                        indexes.push_back(found_keys.size() - 1); 
 
                         vec3_t pos    = vertexes[v];
-                        vec2_t uv     = uvs[t];
+                        vec3_t uv     = uvs[t];
                         vec3_t normal = normals[n];
 
                         vbo_data.push_back(pos.x);
@@ -1051,7 +1028,7 @@ std::map<std::string, struct renderable> loadAllObjs() {
         r.EBO = EBO;
         r.size = indexes.size();
 
-        g.r.collisions[name]  = col;
+        g.collisions[name]    = col;
         g.r.renderables[name] = r;
 
     }
@@ -1079,11 +1056,13 @@ void loadAllTextures() {
         std::string filePath = entry.path().string();
         std::string textureName = entry.path().stem().string();
 
+        struct texture t;
+        t.slot = count;
 
         int width;
         int height;
         int nr_channels;
-        unsigned char* data = stbi_load("path/to/texture.png", &width, &height, &nr_channels, 0);
+        unsigned char* data = stbi_load(filePath.c_str(), &width, &height, &nr_channels, 0);
         
         GLenum format = (nr_channels == 4) ? GL_RGBA : GL_RGB;
         
@@ -1101,14 +1080,15 @@ void loadAllTextures() {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, format, GL_UNSIGNED_BYTE, data);           
         glGenerateMipmap(GL_TEXTURE_2D);
         
-        g.r.textures[textureName] = textureID;
+
+        t.id = textureID;
+        g.r.textures[textureName] = t;
         stbi_image_free(data);
  
     }
 
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    return loadedTextures;
 }
 
 
@@ -1303,7 +1283,7 @@ void generateDefaultLevelDetails(std::string file_name) {
 
 void checkLevelDetails(struct level_info &l, std::string file_name) {
 
-    std::ifstream level_details(level_path);
+    std::ifstream level_details(detailsDir + file_name + ".txt");
     if (!level_details.good()) {
 
         generateDefaultLevelDetails(file_name);
@@ -1317,13 +1297,12 @@ void checkLevelDetails(struct level_info &l, std::string file_name) {
 
 
 // here we could add some sanity checks.
-void saveLevelTime(int i, float time) {
+void saveLevelTime(std::string level_name, float time) {
 
-    level_infos[i].best_time = time;
-    std::string file_name = SAVEFILEPATH + level_infos[i].file_name;
+    std::string file_name = timesDir + level_name + ".txt";
 
-    std::ofstream outFile(filename, std::ios::trunc);
-    outFile << value;
+    std::ofstream outFile(file_name, std::ios::trunc);
+    outFile << time;
 
 }
 
@@ -1340,9 +1319,9 @@ void refreshLevels(std::map<std::string, struct level_info> &levels) {
 
         std::stringstream ss(line);
         struct level_info l;
-        l.best_time = -1.0f;
+        l.global_best_time = -1.0f;
 
-        if (!(ss >> l.visual_name >> l.file_name >> l.gold >> l.silver >> l.bronze)) { 
+        if (!(ss >> l.visual_name >> l.file_name >> l.gold_time >> l.silver_time >> l.bronze_time)) { 
             log("error loading medal times on line: " + std::to_string(line_count));
             line_count++;
             continue;
@@ -1360,7 +1339,7 @@ void refreshLevels(std::map<std::string, struct level_info> &levels) {
         std::string file_name = l.file_name;
 
         // Open saved file.
-        std::fstream save_file(savesDir + l.file_name, std::ios::in);
+        std::fstream save_file(timesDir + l.file_name, std::ios::in);
         if (save_file) { save_file >> l.global_best_time; }
 
         // Open terrain
@@ -1443,6 +1422,8 @@ struct menu_state {
     int active_item      = 0;
     int edit_level       = 0;
     int play_level       = 0;
+
+    struct camera ortho_cam;
 
     std::map<std::string, struct level_info> levels;
 
@@ -1777,12 +1758,12 @@ struct play_state {
     int active_players;
 
     //std::vector<struct 3d_text>         3d_texts;
-    //std::vector<struct static_object>   statics;
+    std::vector<struct static_object>   statics;
     //std::vector<struct moveable_object> moveables;
     //std::vector<struct stat_boost>      stat_boosts; 
     //std::vector<struct enemy>           enemies;
 
-    //struct terrain t;
+    struct terrain t;
 
 };
 
@@ -1792,17 +1773,14 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
 }
 
 
-void renderTerrain() {
+void renderTerrain(unsigned int terrainVAO, int terrain_indices, struct camera c) {
 
-    setActiveProgram("terrain");
+    update_shader_uniform("terrain", "projection", c.proj);
+    update_shader_uniform("terrain", "view",       c.view);
 
-    update_shader_uniform("terrain", "projection", g.camera.projection);
-    update_shader_uniform("terrain", "view",       g.camera.view)
+    glBindVertexArray(terrainVAO);
 
-
-    glBindVertexArray(g.r.terrainVAO);
-
-    glDrawElements(GL_TRIANGLE_STRIP, g.r.terrain_indices, GL_UNSIGNED_INT, (void*) 0);
+    glDrawElements(GL_TRIANGLE_STRIP, terrain_indices, GL_UNSIGNED_INT, (void*) 0);
 
 }
 
@@ -1810,9 +1788,6 @@ void renderTerrain() {
 void renderPlay(int active_players, const struct play_state &state) {
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-
 
     for (int i = 0; i < active_players; i++) {
 
@@ -1830,7 +1805,8 @@ void renderPlay(int active_players, const struct play_state &state) {
         // setup 3d text shader
         // for (3d_text t : 3d_texts) { drawtext_3d(t); }
 
-        //render terrain / background / skybox
+        setActiveProgram("terrain");
+        renderTerrain(g.r.terrainVAO, g.r.terrain_indices, g.camera);
         //set shaderprogram
         // call render terrain.
 
