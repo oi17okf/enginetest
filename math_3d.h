@@ -239,12 +239,12 @@ static inline mat4_t mat4(
 	float m03, float m13, float m23, float m33
 ) {
 	mat4_t res;
-	return mat4_t {
-		res.m[0][0] = m00, res.m[1][0] = m10, res.m[2][0] = m20, res.m[3][0] = m30,
-		res.m[0][1] = m01, res.m[1][1] = m11, res.m[2][1] = m21, res.m[3][1] = m31,
-		res.m[0][2] = m02, res.m[1][2] = m12, res.m[2][2] = m22, res.m[3][2] = m32,
-		res.m[0][3] = m03, res.m[1][3] = m13, res.m[2][3] = m23, res.m[3][3] = m33
-	};
+	
+	res.m[0][0] = m00; res.m[1][0] = m10; res.m[2][0] = m20; res.m[3][0] = m30;
+	res.m[0][1] = m01; res.m[1][1] = m11; res.m[2][1] = m21; res.m[3][1] = m31;
+	res.m[0][2] = m02; res.m[1][2] = m12; res.m[2][2] = m22; res.m[3][2] = m32;
+	res.m[0][3] = m03; res.m[1][3] = m13; res.m[2][3] = m23; res.m[3][3] = m33;
+	
 	return res;
 }
 
@@ -396,14 +396,31 @@ mat4_t m4_rotation(float angle_in_rad, vec3_t axis) {
  * https://unspecified.wordpress.com/2012/06/21/calculating-the-gluperspective-matrix-and-other-opengl-matrix-maths/
  */
 mat4_t m4_ortho(float left, float right, float bottom, float top, float back, float front) {
+
 	float l = left, r = right, b = bottom, t = top, n = front, f = back;
 	float tx = -(r + l) / (r - l);
 	float ty = -(t + b) / (t - b);
 	float tz = -(f + n) / (f - n);
+
 	return mat4(
-		 2 / (r - l),  0,            0,            tx,
-		 0,            2 / (t - b),  0,            ty,
-		 0,            0,            2 / (f - n),  tz,
+		 2.0f / (r - l),  0,            0,            tx,
+		 0,            2.0f / (t - b),  0,            ty,
+		 0,            0,            2.0f / (f - n),  tz,
+		 0,            0,            0,            1
+	);
+}
+
+mat4_t m4_ortho_mine(float left, float right, float bottom, float top, float back, float front) {
+
+	float l = left, r = right, b = bottom, t = top, n = front, f = back;
+	float tx = -(r + l) / (r - l);
+	float ty = -(t + b) / (t - b);
+	float tz = -(f + n) / (f - n);
+	
+	return mat4(
+		 2.0f / (r - l),  0,            0,            tx,
+		 0,            2.0f / (t - b),  0,            ty,
+		 0,            0,            2.0f / (f - n),  tz,
 		 0,            0,            0,            1
 	);
 }
@@ -605,7 +622,7 @@ vec3_t m4_mul_dir(mat4_t matrix, vec3_t direction) {
 }
 
 void m4_print(mat4_t matrix) {
-	m4_fprintp(stdout, matrix, 6, 2);
+	m4_fprintp(stdout, matrix, 6, 3);
 }
 
 void m4_printp(mat4_t matrix, int width, int precision) {

@@ -22,7 +22,7 @@ extern "C" {
 
 #include "glad/glad.h"
 
-#include <SDL3/SDL.h>
+#include "SDL3/SDL.h"
 #include <SDL3/SDL_opengl.h>
 
 
@@ -30,8 +30,8 @@ const std::string textureDir   = "textures\\";
 const std::string objectDir    = "objects\\";
 const std::string terrainDir   = "saves\\terrains\\";
 const std::string shaderDir    = "shaders\\";
-const std::string detailsDir   = "saves\\details\\";
-const std::string timesDir   = "saves\\times\\";
+const std::string detailsDir   = "saves\\levels\\";
+const std::string timesDir     = "saves\\times\\";
 const std::string dataDir      = "data\\";
 const std::string atlasLoc     = "fontatlas.png";
 const std::string levelDataloc = "data\\leveltimes.txt";
@@ -39,10 +39,24 @@ const std::string levelDataloc = "data\\leveltimes.txt";
 
 static inline void log(const char* s) { std::cout << s << std::endl; }
 static inline void log(std::string s) { std::cout << s << std::endl; }
+static inline void log(std::string s, int i) {
+
+    std::cout << s << ": " << i << std::endl;
+}
+
+static inline void log(std::string s, float i) {
+
+    std::cout << s << ": " << i << std::endl;
+}
+
+static inline void log(std::string s, vec3_t v) {
+
+    std::cout << s << " - X: " << v.x << " Y: " << v.y << " Z: " << v.z << std::endl;
+}
 
 #include "shaders.h"
 
-static inline radians(float deg) { return deg * M_PI / 180.0f; }
+static inline float radians(float deg) { return deg * M_PI / 180.0f; }
 
 
 
@@ -146,6 +160,20 @@ struct static_object {
 
 };
 
+struct camera {
+
+    float fov;
+    float width;
+    float height;
+    float near;
+    float far;
+
+    mat4_t proj;
+    mat4_t view;
+
+};
+
+
 // we could calc color from height...
 struct terrain {
 
@@ -165,9 +193,7 @@ struct level_info {
 
     std::string visual_name;
     std::string file_name;
-    float global_best_time;
-    float local_best_time;
-    float current_best_time;
+    float best_time;
     float gold_time;
     float silver_time;
     float bronze_time;
@@ -275,15 +301,15 @@ void appendVertexData(std::string s, int pos, std::vector<float> &vertexes, std:
 
     for (int j = 0; j < s.size(); j++) {
 
-        char c = s[j];
+        char c   = s[j];
         int uv_y = 9 - (c + ascii_offset) / atlas_size;
         int uv_x = (c + ascii_offset) % atlas_size; 
 
         //bl, br, tr, tl
         float uv_x_1 = uv_x * uv_partition;
         float uv_x_2 = uv_x * uv_partition + uv_partition;
-        float uv_y_1 = uv_y * uv_partition;
-        float uv_y_2 = uv_y * uv_partition + uv_partition;
+        float uv_y_1 = uv_y * uv_partition + uv_partition;
+        float uv_y_2 = uv_y * uv_partition;
 
         float pos_x_1 = j;
         float pos_x_2 = j + 1;
@@ -310,22 +336,30 @@ void refreshTexts(std::string s) {
 
     if (g.r.text_infos.find(s) != g.r.text_infos.end()) { return; }
 
-    log("rebuilding texts...");
+    log("rebuilding texts... with " + s);
 
-    std::vector<float> vertexes;
+    std::vector<float>          vertexes;
     std::vector<unsigned int>   indexes;
 
     int final_pos = 0;
 
-    for (auto pair : g.r.text_infos) {
+    std::vector<std::string> old_texts;
 
-        std::string      name = pair.first;
-        struct text_info info = pair.second;
+    for (auto &pair : g.r.text_infos) { old_texts.push_back(pair.first); }
 
-        if (info.pos != final_pos) { log("error refreshTexts"); SDL_Quit(); }
-        final_pos =+ info.len;
+    for (std::string name : old_texts) {
 
-        appendVertexData(name, info.pos, vertexes, indexes);
+        appendVertexData(name, final_pos, vertexes, indexes);
+
+        struct text_info info;
+        info.pos = final_pos;
+        info.len = name.size();
+
+        std::cout << name << " - " << info.pos << " - " << info.len << std::endl;
+
+        final_pos += name.size();
+
+        g.r.text_infos[name] = info;
 
     }
 
@@ -338,13 +372,15 @@ void refreshTexts(std::string s) {
     g.r.text_infos[s] = info;
 
     // Talk about this... 
-    glBindVertexArray(0);
+    glBindVertexArray(g.r.textVAO);
 
     glBindBuffer(GL_ARRAY_BUFFER, g.r.textVBO);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.r.textEBO);
 
-    glBufferData(GL_ARRAY_BUFFER,         vertexes.size() * sizeof(float), vertexes.data(), GL_STATIC_DRAW);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()  * sizeof(int),   indexes.data(),  GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,         vertexes.size() * sizeof(float),          vertexes.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()  * sizeof(unsigned int),   indexes.data(),  GL_STATIC_DRAW);
+
+    glBindVertexArray(0);
 
 
 }
@@ -352,12 +388,15 @@ void refreshTexts(std::string s) {
 
 void initializeTexts() {
 
+    /*
     std::vector<std::string> game_strings {
 
         "PLAY", "SPLITSCREEN", "QUIT", "START", "GOAL", "ENEMY", "RETURN",
         "CREATE NEW LEVEL!", "TOGGLE PLAYERS", "EDIT", "REFRESH LEVELS",
         "LEVEL1", "LEVEL2", "LEVEL3"
-    };
+    }; */
+
+    std::vector<std::string> game_strings { "PLAY" };
 
     glGenVertexArrays(1, &g.r.textVAO);
     glGenBuffers     (1, &g.r.textVBO);
@@ -370,13 +409,15 @@ void initializeTexts() {
     for (int i = 0; i < game_strings.size(); i++) {
 
         std::string s = game_strings[i];
-        log(s);
+        
 
         appendVertexData(s, pos, vertexes, indexes);
 
         struct text_info info;
         info.pos = pos;
         info.len = s.size();
+
+        std::cout << s << " - " << info.pos << " - " << info.len << std::endl;
 
         pos += s.size();
 
@@ -436,6 +477,7 @@ void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
         SDL_Quit();
     }
 
+    /*
     try {
         unsigned int size_loc = g.r.programs.at("text2d").uniform_locations.at("size");
         glUniform1i(size_loc, size);
@@ -443,6 +485,8 @@ void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
         log("failed to set size");
         SDL_Quit();
     }
+    */
+    update_shader_uniform("text2d", "size", size);
 
     try {
         unsigned int color_loc = g.r.programs.at("text2d").uniform_locations.at("color");
@@ -458,7 +502,11 @@ void drawtext_2d(std::string text, int x, int y, int size, vec3_t color) {
     size_t byte_offset = (size_t)t.pos * 6 * sizeof(unsigned int);
     glDrawElements(GL_TRIANGLES, num_indices, GL_UNSIGNED_INT, (void*)byte_offset);
 
+}
 
+void drawtext_2d(std::string text, int x, int y, int size) {
+    vec3_t c = vec3(1, 1, 1);
+    drawtext_2d(text, x, y, size, c);
 }
 
 struct text_3d {
@@ -555,7 +603,7 @@ void uploadTerrain(struct level_info &l, int editMode) {
     int bpp    = 4;
 
     std::vector<float> vertex;
-    std::vector<int>   index;
+    std::vector<unsigned int>   index;
 
     // While a visual map looks to represent a "tile",
     // it insteads represent the top left vertex of that tile.
@@ -572,8 +620,9 @@ void uploadTerrain(struct level_info &l, int editMode) {
 
             // Just input data for VBO here.
             vertex.push_back(j *  grid_size); // X
-            vertex.push_back(i * -grid_size); // Y, grow down.
             vertex.push_back(height);
+            vertex.push_back(i * -grid_size); // Y, grow down.
+
 
             float r = (float)l.t.colors[(i * width + j) * bpp];
             float g = (float)l.t.colors[(i * width + j) * bpp + 1];
@@ -615,6 +664,9 @@ void uploadTerrain(struct level_info &l, int editMode) {
 
     glBufferData(GL_ARRAY_BUFFER,         vertex.size() * sizeof(float),         vertex.data(), buffer_type); // Change when we make terrain editable
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, index.size()  * sizeof(unsigned int),  index.data(),  GL_STATIC_DRAW); // indices
+
+    log("vertexes", (int)vertex.size());
+    log("index", (int)index.size());
 
     g.r.terrain_indices = index.size();
 
@@ -692,36 +744,8 @@ struct special_ingame_object {
 };
 
 
-struct camera {
-
-    float fov;
-    float width;
-    float height;
-    float near;
-    float far;
 
 
-    mat4_t proj;
-    mat4_t view;
-
-};
-
-struct player {
-    
-    vec3_t pos; 
-    vec3_t vel;
-
-    float yaw;
-    float pitch;
-    float radius;
-
-    float has_dashed;
-    float can_jump;
-
-    struct camera cam;
-    float timer;
-
-};
 
 
 void update_player(struct player_input& i, struct player& p) {
@@ -735,13 +759,11 @@ void update_player(struct player_input& i, struct player& p) {
 
 
     // update move based on either yaw or pitch.
-    //acc.x = cosf(pitch); //something like this.
-    //acc.z = sinf(pitch);
 
 
-    //acc += i.move_x
-    //vel += acc;
-    //pos += vel;
+    // acc += i.move_x
+    // vel += acc;
+    // pos += vel;
 
     // https://www.youtube.com/watch?v=j_bTClbcCao
     // bilinear interp
@@ -757,7 +779,7 @@ void update_player(struct player_input& i, struct player& p) {
         //    resolve collision. Should we use point? as a start we can just check each axis movement and remove the one that caused collision.
         //    here we should also consider allowing stairs, by just moving upwards. for this we might need to have preserved last frame's position and compare it.
 
-    //}
+    // }
     
     // check for collisions with moving objects, similar to above but we should resolve collisions a bit different.
 
@@ -856,11 +878,13 @@ void renderObj(std::string name) {
 
     glBindVertexArray(r.VAO);
 
+    //std::cout << "drawing obj with size: " << r.size << std::endl;
+
     glDrawElements(GL_TRIANGLES, r.size, GL_UNSIGNED_INT, (void*)0);
 
 }
 
-void renderStatic(struct static_object &obj) {
+void renderStatic(const struct static_object &obj) {
 
 
     // set pos uniform
@@ -868,7 +892,10 @@ void renderStatic(struct static_object &obj) {
     // or just do model directly.
 
     struct texture t = g.r.textures[obj.texture_name];
+    mat4_t model = m4_translation(obj.pos);
+    //update_shader_uniform("default", "textureID", t.slot);
     update_shader_uniform("default", "textureID", t.slot);
+    update_shader_uniform("default", "model", model);
 
     renderObj(obj.mesh_name);
 }
@@ -883,6 +910,8 @@ void loadAllObjs() {
     }
 
     for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(objectDir)) {
+
+        log("loop1" + entry.path().string());
 
         if (!entry.is_regular_file()) { continue; }
 
@@ -907,8 +936,10 @@ void loadAllObjs() {
         col.max = vec3(INT_MIN, INT_MIN, INT_MIN);
 
         // This is all a bit stupid... but i am tired...
-
+        int count = 0;
         while(std::getline(file, line)) {
+            //log("line" + std::to_string(count));
+            count++;
 
             std::stringstream ss(line);
             std::string linetype;
@@ -965,6 +996,7 @@ void loadAllObjs() {
                     int v, t, n;
                     sss >> v >> slash >> t >> slash >> n;
                     std::tuple<int, int, int> index = std::make_tuple(v, t, n);
+                    //std::cout << v << t << n << std::endl;
 
                     auto it = found_keys.find(index);
 
@@ -978,20 +1010,20 @@ void loadAllObjs() {
                         found_keys.insert(index); 
                         indexes.push_back(found_keys.size() - 1); 
 
-                        vec3_t pos    = vertexes[v];
-                        vec3_t uv     = uvs[t];
-                        vec3_t normal = normals[n];
+                        vec3_t pos    = vertexes[v - 1];
+                        vec3_t uv     = uvs[t - 1];
+                        vec3_t normal = normals[n - 1];
 
                         vbo_data.push_back(pos.x);
                         vbo_data.push_back(pos.y);
                         vbo_data.push_back(pos.z);
 
-                        vbo_data.push_back(uv.x);
-                        vbo_data.push_back(uv.y);
-
                         vbo_data.push_back(normal.x);
                         vbo_data.push_back(normal.y);
                         vbo_data.push_back(normal.z);
+
+                        vbo_data.push_back(uv.x);
+                        vbo_data.push_back(uv.y);
                     }
                 }
             }
@@ -1027,6 +1059,7 @@ void loadAllObjs() {
         r.VBO = VBO;
         r.EBO = EBO;
         r.size = indexes.size();
+        log("built object " + name + std::to_string(r.size));
 
         g.collisions[name]    = col;
         g.r.renderables[name] = r;
@@ -1150,48 +1183,8 @@ int check_default_events(SDL_Event& event) {
 
 // Movement of character can just be done 
 
-/* 
-void update_player_view(struct player& p) {
 
-    // Y is Up.
-    // The larger the pitch is, the closer to X,Z we will get.
-    vec3_t camera_pos = vec3( cosf(radians(p.yaw)) * cosf(radians(p.pitch)),
-                        sinf(radians(p.pitch)),
-                        sinf(radians(p.yaw)) * cosf(radians(p.pitch)))
 
-    vec3_t to   = vec3(p.pos.x, p.pos.y + 5, p.pos.z);
-    vec3_t up   = vec3(0.0f, 1.0f, 0.0f);
-    p.cam.view  = m4_look_at(camera_pos, to, up);
-
-}
-
-void setupPlayers(int count) {
-
-    for (int i = 0; i < count; i++) {
-
-        struct player p;
-        p.pos        = vec3(level.startpos.x + i * 5, level.startpos.y, level.startpos.z);
-        p.vel        = vec3(0,0,0);
-        p.has_dashed = 0;
-        p.can_jump   = 0;
-
-        p.cam.fov    = 90.0f;
-        p.cam.width  = screen_width / count;
-        p.cam.height = screen_height / count;
-        p.cam.near   = 0.1f;
-        p.cam.far    = 1000.0f;
-        p.cam.proj   = m4_perspective(p.cam.fov, p.cam.width / p.cam.height, near, far);
-
-        update_player_view(p);
-
-        reset_timer(p.t);
-
-        players.push_back(p);
-
-    }
-}
-
-*/
 
 void finishLevel(int player_id) {
 
@@ -1223,14 +1216,17 @@ int loadStart(struct level_info &l, std::ifstream &level_file) {
 // ugly (unlike you, dear student)
 int loadStatics(struct level_info &l, std::ifstream &level_file) {
 
+    log("loading statics");
     std::string line;
     while(std::getline(level_file, line)) {
+
+        log("line: " + line);
 
         std::stringstream ss(line);
         std::string first_word = "";
         ss >> first_word;
         if (first_word == "END:") { break; }
-        if (first_word == "")     { log("error loading static object"); return -1; }
+        if (first_word == "")     { continue; }
 
         struct static_object o;
         o.mesh_name = first_word;
@@ -1249,14 +1245,16 @@ int loadStatics(struct level_info &l, std::ifstream &level_file) {
 
 void loadLevelDetails(struct level_info &l, std::string file_name) {
 
+    log("loading level details for " + file_name);
+
     std::ifstream level_file(detailsDir + file_name + ".txt");
 
     std::string line;
     int ret = 0;
     while(std::getline(level_file, line)) {
 
-        if      (line.find("START:")    != std::string::npos) { ret = loadGoal    (l, level_file); }
-        else if (line.find("GOAL:")     != std::string::npos) { ret = loadStart   (l, level_file); }
+        if      (line.find("START:")    != std::string::npos) { ret = loadStart    (l, level_file); }
+        else if (line.find("GOAL:")     != std::string::npos) { ret = loadGoal   (l, level_file); }
         else if (line.find("STATIC:")   != std::string::npos) { ret = loadStatics (l, level_file); }
         //else if (line.find("MOVEABLE:") != std::string::npos) { ret = loadDynamics(level_file); } add later
 
@@ -1307,7 +1305,7 @@ void saveLevelTime(std::string level_name, float time) {
 }
 
 
-void refreshLevels(std::map<std::string, struct level_info> &levels) {
+void refreshLevels(std::vector<struct level_info> &levels) {
 
     levels.clear();
 
@@ -1319,7 +1317,7 @@ void refreshLevels(std::map<std::string, struct level_info> &levels) {
 
         std::stringstream ss(line);
         struct level_info l;
-        l.global_best_time = -1.0f;
+        l.best_time = -1.0f;
 
         if (!(ss >> l.visual_name >> l.file_name >> l.gold_time >> l.silver_time >> l.bronze_time)) { 
             log("error loading medal times on line: " + std::to_string(line_count));
@@ -1327,20 +1325,19 @@ void refreshLevels(std::map<std::string, struct level_info> &levels) {
             continue;
         } 
 
-        levels[l.file_name] = l;
+        levels.push_back(l);
 
         line_count++;
 
     }
 
-    for (auto &pair : levels) {
+    for (struct level_info &l : levels) {
 
-        struct level_info &l = pair.second;
         std::string file_name = l.file_name;
 
         // Open saved file.
         std::fstream save_file(timesDir + l.file_name, std::ios::in);
-        if (save_file) { save_file >> l.global_best_time; }
+        if (save_file) { save_file >> l.best_time; }
 
         // Open terrain
         checkTerrain(l, l.file_name);
@@ -1423,9 +1420,9 @@ struct menu_state {
     int edit_level       = 0;
     int play_level       = 0;
 
-    struct camera ortho_cam;
+    mat4_t ortho_cam;
 
-    std::map<std::string, struct level_info> levels;
+    std::vector<struct level_info> levels;
 
     std::vector<std::string> menu_items = { "PLAY", "TOGGLE PLAYERS", "EDIT", "REFRESH LEVELS", "QUIT" };
     int item_space = 100;
@@ -1455,7 +1452,7 @@ GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
 
     } else {
 
-        state.active_item += i.move; 
+        state.active_item -= i.move; 
         clamp(state.active_item, 0, menu_items_count, 0);
     }
 
@@ -1488,7 +1485,6 @@ GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
                 state.active_item = 0;
             } else {
 
-                //setupPlayLevel(state.active_item - 1);
                 gamemode = GameMode::PLAY;
             }
 
@@ -1497,7 +1493,7 @@ GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
             if (state.menu_items[state.active_item] == "PLAY")           { log("hi"); state.play_level = 1; }
             if (state.menu_items[state.active_item] == "TOGGLE PLAYERS") { state.selected_players = state.selected_players == 1 ? 2 : 1; }
             if (state.menu_items[state.active_item] == "EDIT")           { state.edit_level = 1; }
-            if (state.menu_items[state.active_item] == "REFRESH LEVELS") { /*refreshLevels(state); */ }
+            if (state.menu_items[state.active_item] == "REFRESH LEVELS") { refreshLevels(state.levels); }
             if (state.menu_items[state.active_item] == "QUIT")           { log("quit press"); gamemode = GameMode::QUIT; }
         }
     }
@@ -1517,6 +1513,8 @@ GameMode doMenuLogic(struct menu_state& state, struct menu_input i) {
 
     if (i.quit) { gamemode = GameMode::QUIT; }
 
+    state.ortho_cam = m4_ortho(0, g.window_width, g.window_height, 0, 0, 100);
+
     return gamemode;
 
 }
@@ -1529,6 +1527,7 @@ void renderMenu(const struct menu_state &state) {
 
     // Turn on correct shader program.
     setActiveProgram("text2d");
+    update_shader_uniform("text2d", "ortho_cam", state.ortho_cam);
 
     // vec3_t color = vec3(0, 1, 0);
     for (int i = 0; i < state.menu_items.size(); i++) {
@@ -1538,45 +1537,42 @@ void renderMenu(const struct menu_state &state) {
 
             color = vec3(0, 1, 0); 
         }
-        drawtext_2d(state.menu_items[i], state.item_space, state.item_space + state.item_space * i, 100, color);
+        drawtext_2d(state.menu_items[i], state.item_space, state.item_space + state.item_space * i, 30, color);
     }
-    
 
-    //for (int i = 0; i < game_strings.size(); i++) {
-        //drawtext_2d(game_strings[i], state.item_space, state.item_space + state.item_space * i, 100, color, i);
-    //}
+
 
     if (state.edit_level) {
 
         std::string t = "CREATE NEW LEVEL!";
         vec3_t color = vec3(1, 1, 1);
         if (state.active_item == 0) { color = vec3(0, 1, 0); }
-        //drawtext_2d(t, state.item_space * 2, state.item_space, 10, color);
+        drawtext_2d(t, state.item_space * 8, state.item_space, 30, color);
 
         int i = 0;
-        for (auto pair : state.levels) {
+        for (struct level_info l : state.levels) {
             i++;
             color = vec3(1, 1, 1);
-            std::string s = pair.first;
+            std::string s = l.visual_name;
             if (state.active_item == i) { color = vec3(0, 1, 0); }
-            //drawtext_2d(s, state.item_space * 2, state.item_space + state.item_space * i, 10, color);
+            drawtext_2d(s, state.item_space * 8, state.item_space + state.item_space * i, 30, color);
 
         }
 
         std::string b = "RETURN";
         color = vec3(1, 1, 1);
         if (state.active_item == state.levels.size() + 1) { color = vec3(0, 1, 0); }
-        //drawtext_2d(b, state.item_space * 2, (state.levels.size() + 2) * state.item_space, 10, color);
+        drawtext_2d(b, state.item_space * 8, (state.levels.size() + 2) * state.item_space, 30, color);
 
     } else if (state.play_level) {
 
         int i = 0;
-        for (auto pair : state.levels) {
+        for (struct level_info l : state.levels) {
 
             vec3_t color = vec3(1, 1, 1);
-            std::string s = pair.first;
+            std::string s = l.visual_name;
             if (state.active_item == i) { color = vec3(0, 1, 0); }
-            //drawtext_2d(s, state.item_space * 2, state.item_space + state.item_space * i, 10, color);
+            drawtext_2d(s, state.item_space * 8, state.item_space + state.item_space * i, 30, color);
             i++;
 
         }
@@ -1584,7 +1580,7 @@ void renderMenu(const struct menu_state &state) {
         std::string b = "RETURN";
         vec3_t color = vec3(1, 1, 1);
         if (state.active_item == state.levels.size()) { color = vec3(0, 1, 0); }
-        //drawtext_2d(b, state.item_space * 2, (state.levels.size() + 1) * state.item_space, 10, color);
+        drawtext_2d(b, state.item_space * 8, (state.levels.size() + 1) * state.item_space, 30, color);
 
     }
 
@@ -1606,6 +1602,7 @@ GameMode runMenu(struct menu_result &res) {
     struct menu_state state;
     GameMode gamemode = GameMode::MENU;
     refreshLevels(state.levels);
+
     log("inside menu");
 
     while (gamemode == GameMode::MENU) {
@@ -1616,7 +1613,7 @@ GameMode runMenu(struct menu_result &res) {
         
         log("after logic");
         update_fps();
-        limit_fps(1);
+        limit_fps(2);
         log("after fps");
 
         checkShaders(g.r.shaders);
@@ -1624,7 +1621,7 @@ GameMode runMenu(struct menu_result &res) {
         cleanShaders(g.r.shaders);
 
         renderMenu(state);
-        log("menu loop");
+        log("-------------menu loop done-----------------");
 
     }
 
@@ -1633,7 +1630,9 @@ GameMode runMenu(struct menu_result &res) {
     //cleanup, if any.
 
     res.active_players = state.selected_players;
-    //res.l = ???
+
+    if (gamemode == GameMode::PLAY) { res.l = state.levels[state.active_item]; }
+
 
     return gamemode;
 
@@ -1750,12 +1749,36 @@ void getPlayInput(int active_players, struct player_input* inputs) {
     
 }
 
+struct player {
+    
+    vec3_t pos; 
+    vec3_t vel;
+
+    float yaw = 0.0f;
+    float pitch = 20.0f;
+    float radius = 100.0f;
+
+    float has_dashed = 0;
+    float can_jump   = 0;
+
+    struct camera cam;
+    float timer = 0.0f;
+
+};
+
 struct play_state {
 
     vec3_t start_point;
     vec3_t goal_point;
 
     int active_players;
+
+    float gold_time, silver_time, bronze_time;
+    float global_best_time, local_best_time;
+
+    int gold_beaten, silver_beaten, bronze_beaten;
+
+    std::string level_visual_name;
 
     //std::vector<struct 3d_text>         3d_texts;
     std::vector<struct static_object>   statics;
@@ -1767,9 +1790,81 @@ struct play_state {
 
 };
 
-GameMode doPlayLogic(int active_players, struct play_state &state, struct player_input* inputs) {
+void update_player_view(struct player& p) {
 
-    return GameMode::PLAY;
+    // Y is Up.
+    // The larger the pitch is, the closer to X,Z we will get.
+    vec3_t offset = vec3(cosf(radians(p.yaw))   * cosf(radians(p.pitch)) * p.radius,
+                         sinf(radians(p.pitch)) * p.radius,
+                         sinf(radians(p.yaw))   * cosf(radians(p.pitch)) * p.radius);
+
+    vec3_t camera_pos = vec3(p.pos.x + offset.x, p.pos.y + offset.y, p.pos.z + offset.z);
+
+    vec3_t to   = vec3(p.pos.x, p.pos.y, p.pos.z);
+    vec3_t up   = vec3(0.0f, 1.0f, 0.0f);
+    p.cam.view  = m4_look_at(camera_pos, to, up);
+
+}
+
+
+GameMode doPlayLogic(int active_players, struct play_state &state, struct player_input* inputs, struct player* players) {
+
+    GameMode mode = GameMode::PLAY;
+
+    for (int i = 0; i < active_players; i++) {
+
+        struct player_input &in = inputs[i];
+        struct player &p        = players[i];
+
+        p.yaw   += in.rotate_cam_x;
+        p.pitch += in.rotate_cam_y;
+
+        float forward_yaw_in_radians = radians(p.yaw);
+        float right_yaw_in_radians   = radians(p.yaw + 90.0f);
+
+        float forward_move_x = cosf(forward_yaw_in_radians); 
+        float forward_move_y = sinf(forward_yaw_in_radians);
+
+        float right_move_x = cosf(right_yaw_in_radians); 
+        float right_move_y = sinf(right_yaw_in_radians);
+
+        p.pos.x += right_move_x * in.move_x;
+        p.pos.z += right_move_y * in.move_x;
+
+        p.pos.x -= forward_move_x * in.move_y;
+        p.pos.z -= forward_move_y * in.move_y;
+
+        std::cout << "player" << (i+1) << " POS X: " << p.pos.x << " Y: " << p.pos.y << " Z: " << p.pos.z << std::endl;
+
+        if (in.jump) {
+
+            p.vel.y = 10;
+            p.can_jump = 0;
+        }
+
+        p.vel.y -= 1.0f;
+
+        if (p.pos.y < 0 && p.vel.y < 0) { p.vel.y = 0; p.can_jump = 1; }
+
+        p.pos.y += p.vel.y;
+
+        if (p.pos.x > 0 && p.pos.x < state.t.size && p.pos.z > 0 && p.pos.z < state.t.size) {
+
+            log("inside terrain!!!");
+        } 
+
+
+        
+
+
+
+        update_player_view(p);
+
+        if (in.quit) { mode = GameMode::QUIT; }
+
+    }
+
+    return mode;
 }
 
 
@@ -1784,48 +1879,103 @@ void renderTerrain(unsigned int terrainVAO, int terrain_indices, struct camera c
 
 }
 
+// update to do more than just a cube.
+// also deal myself! swap color or something.
+void renderPlayer(struct player p, int myself) {
 
-void renderPlay(int active_players, const struct play_state &state) {
 
+
+    mat4_t model = m4_translation(p.pos);
+    update_shader_uniform("default", "model", model);
+    renderObj("teapot");
+}
+
+void renderPlay(int active_players, const struct play_state &state, struct player* players) {
+
+    log("renderplay");
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Look into doing several loops over players, 1 for each shader essentially. 
+    // Probs more performant.
 
     for (int i = 0; i < active_players; i++) {
 
-        int startx = i       / active_players * g.window_width;
-        int starty = i       / active_players * g.window_height;
-        int endx   = (i + 1) / active_players * g.window_width;
-        int endy   = (i + 1) / active_players * g.window_height;
-        glViewport(startx, starty, endx, endy);
+        struct player &p = players[i];
 
+        int startx = 0;
+        int endx   = g.window_width;
+
+        int y_step = g.window_height / active_players;
+        int starty = i       * y_step;
+        int endy   = (i + 1) * y_step;
+        glViewport(0, starty, g.window_width, y_step);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, starty, g.window_width, y_step);
+        if (i == 0) {
+            glClearColor(0.1f, 0.0f, 0.0f, 1.0f); 
+        } else {
+            glClearColor(0.0f, 0.1f, 0.0f, 1.0f);
+        }
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
         
-        //render static platform objects
+        std::cout << "viewport" << startx << " " << endx << " " << starty << " " << endy << " " << std::endl;
+
+        log("rendering statics");
+        setActiveProgram("default");
+        update_shader_uniform("default", "view",       players[i].cam.view);
+        update_shader_uniform("default", "projection", players[i].cam.proj);
+
+        for (int j = 0; j < state.statics.size(); j++) {
+
+            //std::cout << "trying to render " << state.statics[j].mesh_name << " " << state.statics[j].texture_name << std::endl;
+            renderStatic(state.statics[j]);
+        }
+
+        //render player(s) ---- IMPORTANT
+        for (int j = 0; j < active_players; j++) {
+
+            renderPlayer(players[j], i == j);
+        }
+
+
         //render enemies
-        //render player
-        //render 3d text
+        
+        // render 3d text
         // setup 3d text shader
         // for (3d_text t : 3d_texts) { drawtext_3d(t); }
-
+        log("rendering terrain...");
         setActiveProgram("terrain");
-        renderTerrain(g.r.terrainVAO, g.r.terrain_indices, g.camera);
-        //set shaderprogram
-        // call render terrain.
+        renderTerrain(g.r.terrainVAO, g.r.terrain_indices, p.cam); // updates camera uniforms
 
-        //render any ui stuff specific to a player
+        // render any ui stuff specific to a player
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
-        //ui stuff
-        //render timer
+
+        log("rendering player text...");
+        setActiveProgram("text2d");
+        mat4_t ortho_cam = m4_ortho(0, g.window_width, y_step, 0, 0, 100);
+        update_shader_uniform("text2d", "ortho_cam", ortho_cam);
+
+        std::string player_text = "player " + std::to_string(i+1);
+        drawtext_2d(player_text, 10, 50, 40);
+        // ui stuff
+        // render timer
         glEnable(GL_DEPTH_TEST); 
         glEnable(GL_CULL_FACE);
     } 
 
     glViewport(0, 0, g.window_width, g.window_height);
-    //render any ui stuff not specific to a player
+    // render any ui stuff not specific to a player
     // renderAllTextUI()
-    //glDisable(GL_DEPTH_TEST);
-    //glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
 
+    setActiveProgram("text2d");
+    mat4_t ortho_cam = m4_ortho(0, g.window_width, g.window_height, 0, -1, 1);
+    update_shader_uniform("text2d", "ortho_cam", ortho_cam);
 
+    drawtext_2d("O", g.window_width / 2, g.window_height / 2, 20);
 
     glEnable(GL_DEPTH_TEST); 
     glEnable(GL_CULL_FACE);  
@@ -1838,31 +1988,79 @@ void renderPlay(int active_players, const struct play_state &state) {
 struct play_result {
 
     float new_highscore;
+
 };
 
 GameMode runGame(struct play_result &res, struct level_info level_info, int active_players) {
 
+    log("rungame");
+
     GameMode gamemode = GameMode::PLAY;
+
     struct play_state state;
+
     state.active_players = active_players;
-    // Fill state with values from level_info...
+
+    state.statics        = level_info.statics;
+
+    state.start_point    = level_info.start_pos;
+    state.goal_point     = level_info.goal_pos;
+
+    state.level_visual_name = level_info.visual_name;
+
+    state.gold_time         = level_info.gold_time;
+    state.silver_time       = level_info.silver_time;
+    state.bronze_time       = level_info.bronze_time;
+
+    state.global_best_time  = level_info.best_time;
+    state.local_best_time   = -1;
+
+    state.gold_beaten = 0; state.silver_beaten = 0; state.bronze_beaten = 0;
+
+    state.t = level_info.t;
+
+    log("Start point", state.start_point);
+
+    uploadTerrain(level_info, 0);
+
+    struct player players[active_players];
+
+    for (int i = 0; i < active_players; i++) {
+
+        players[i].pos = vec3(state.start_point.x + (i * 5), state.start_point.y, state.start_point.z);
+        players[i].vel = vec3(0, 0, 0);
+
+        float player_window_width = g.window_width / active_players;
+
+        players[i].cam.proj = m4_perspective(60, player_window_width / g.window_height, 1.0f, 10000.0f);
+        update_player_view(players[i]);
+        
+    }
+
+    std::cout << "static objects:" << state.statics.size() << std::endl;
+
+    log("run game setup done");
 
     while (gamemode == GameMode::PLAY) {
 
         struct player_input inputs[active_players];
 
         getPlayInput(active_players, inputs);
+        log("play input done");
         
-        gamemode = doPlayLogic(active_players, state, inputs);
+        gamemode = doPlayLogic(active_players, state, inputs, players);
+        log("play logic done");
         update_fps();
-        limit_fps(120);
+        limit_fps(10);
         
-        renderPlay(active_players, state);
+        renderPlay(active_players, state, players);
+        log("render play done");
 
         // Should we also do this in all other states?
         checkShaders(g.r.shaders);
         checkShaderPrograms(g.r.programs, g.r.shaders);
         cleanShaders(g.r.shaders);
+        log("--------------------------loop done----------------------------");
 
     }
 
@@ -1966,6 +2164,7 @@ int main(int argc, char* argv[]) {
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
     SDL_GL_SetSwapInterval(1); // vsync on
 
@@ -1980,11 +2179,15 @@ int main(int argc, char* argv[]) {
     initializeFontAtlas();
     initializeTexts();
 
+    log("yo");
+
     initTerrain();
     // initialize all text objects that are needed for the game.
+    log("yo");
     loadAllTextures();
+    log("yo");
     loadAllObjs();
-
+    log("yo");
     loadShaders(g.r.shaders);
     setupShaderPrograms(g.r.programs, g.r.shaders);
 

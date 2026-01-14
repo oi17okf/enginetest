@@ -1,0 +1,6 @@
+START:
+0 0 0
+GOAL:
+100 100 0
+STATIC:
+END:
