@@ -57,24 +57,41 @@ static inline void log(std::string s, vec3_t v) {
 #include "shaders.h"
 
 static inline float radians(float deg) { return deg * M_PI / 180.0f; }
+static inline float lerp(float val1, float val2, float x) {
+
+    return val1 * (1 - x) + val2 * x;
+}
 
 
 
-// MUST Before monday.
-// Load in level w terrain & static objects
-// Have a floating camera that can move around in the level.
+/* TODO
+ * 
+ * Implement texture for terrain.
+ * Implement normals for terrain.
+ * Add player with rotation (to where it is moving), and moving arms/legs etc.
+ * Fix Obj loader
+ * Hook up AABB collision to player
+ * Add functional goal w level restart.
+ * Add ability to go back to menu.
+ * Add button that restarts the player.
+ * Add visual timer
+ * Improve menu & game UI.
+ * 
+ * Improve camera
+ * Add actual nice player movement w abilities and proper physics.
+ * Add moving objects (w pushing collision)
+ * Add bouncers 
+ * Add collectibles
+ * Add door that opens after a certain amount of collectibles.
+ * Add an enemy or two with fun AI.
 
-// Ideally before sunday.
-// Change camera to player that can move and has collisions on terrain & objects. 
-// Make it start at start and end level if it touches end.
+ * Add ability to edit terrain. Raycast to grid, increase closest (or group),
+                                Then update actual data structure, upload to GPU, and save to file...
 
-// make it so a player (sphere) can walk across terrain on a level w a camera that can be moved by the mouse.
-// integrate start & goal along w a timer / highscore. (if difficult, ignore visualizing timer)
-// add in static objects w collisions
-// integrate splitscreen
-// make player controls a bit fun along w adding legs / simple animations
-// add in moving platforms, enemies, bouncers along w something interactable
-// update plan after this
+ * Add ability edit actual level if time...
+ */
+
+
 
 
 // frustrum culling?
@@ -179,6 +196,7 @@ struct terrain {
 
     int size;
 
+    int grid_size = 25.0f;
     // these are both bpp = 4, to make writing / reading simpler.
     std::vector<unsigned char> colors; // Allows for simple editing
     std::vector<unsigned char> height; // Same but also used for collision
@@ -608,8 +626,7 @@ void uploadTerrain(struct level_info &l, int editMode) {
     // While a visual map looks to represent a "tile",
     // it insteads represent the top left vertex of that tile.
 
-    const float grid_size = 1.0f;
-
+    // VBO
     for (int i = 0; i < height; i++) {
 
         for (int j = 0; j < width; j++) {
@@ -619,10 +636,9 @@ void uploadTerrain(struct level_info &l, int editMode) {
             // we should also normalize height somewhat?
 
             // Just input data for VBO here.
-            vertex.push_back(j *  grid_size); // X
+            vertex.push_back(j * l.t.grid_size); // X
             vertex.push_back(height);
-            vertex.push_back(i * -grid_size); // Y, grow down.
-
+            vertex.push_back(i * l.t.grid_size); // Y, grow down.
 
             float r = (float)l.t.colors[(i * width + j) * bpp];
             float g = (float)l.t.colors[(i * width + j) * bpp + 1];
@@ -631,29 +647,27 @@ void uploadTerrain(struct level_info &l, int editMode) {
             vertex.push_back(r); 
             vertex.push_back(g);
             vertex.push_back(b);
+    
+        }
+    }
 
-            // EBO
-            if (i != 0) {
+    // EBO
+    for (int i = 0; i < height - 1; i++) {
 
-                int p1 = j + (i - 1) * width;
-                int p2 = j + i       * width;
+        if (i != 0) { index.push_back(i * width); }
 
-                // Extra index at start of row for degen tri.
-                if (i > 1 && j == 0) {
-                    index.push_back(p1);
-                }
+        for (int j = 0; j < width; j++) {
 
-                index.push_back(p1);
-                index.push_back(p2);
+            int p1 = j +  i      * width;
+            int p2 = j + (i + 1) * width;
 
-                if (i > 0 && i < height -1 && j == width - 1) {
-                    index.push_back(p2);
-                }
-
-            }
+            index.push_back(p1);
+            index.push_back(p2);
 
         }
 
+        if (i != height - 2) { index.push_back((i + 2) * width - 1); }
+            
     }
 
     glBindVertexArray(g.r.terrainVAO); // we could skip this if we assumed no vao is bound.
@@ -1651,6 +1665,7 @@ struct player_input {
     float rotate_cam_y = 0.0f;
     float zoom         = 0.0f;
 
+    int sprint  = 0;
     int restart = 0;
     int pause   = 0;
     int quit    = 0;
@@ -1724,11 +1739,12 @@ void getPlayInput(int active_players, struct player_input* inputs) {
 
     const bool* keystate = SDL_GetKeyboardState(nullptr);
 
-    if (keystate[SDL_SCANCODE_SPACE]) { inputs[0].floating  = 1; }
-    if (keystate[SDL_SCANCODE_W])     { inputs[0].move_y   += 1; }
-    if (keystate[SDL_SCANCODE_S])     { inputs[0].move_y   -= 1; }
-    if (keystate[SDL_SCANCODE_A])     { inputs[0].move_x   += 1; }
-    if (keystate[SDL_SCANCODE_D])     { inputs[0].move_x   -= 1; }
+    if (keystate[SDL_SCANCODE_SPACE])  { inputs[0].floating  = 1; }
+    if (keystate[SDL_SCANCODE_W])      { inputs[0].move_y   += 1; }
+    if (keystate[SDL_SCANCODE_S])      { inputs[0].move_y   -= 1; }
+    if (keystate[SDL_SCANCODE_A])      { inputs[0].move_x   += 1; }
+    if (keystate[SDL_SCANCODE_D])      { inputs[0].move_x   -= 1; }
+    if (keystate[SDL_SCANCODE_LSHIFT]) { inputs[0].sprint    = 1; }
 
     // if splitscreen & controller active
     if (g.gamepad != nullptr) {
@@ -1807,6 +1823,42 @@ void update_player_view(struct player& p) {
 }
 
 
+// Todo, deal w crashes later at extreme points later...
+// Uses bilateral interp, not perfect but works
+float getTerrainCollision(struct terrain &t, struct player &p) {
+
+    float height = 0.0f;
+
+    if (p.pos.x > 0 && p.pos.z > 0) {
+
+        if (p.pos.x < t.size * t.grid_size && p.pos.z < t.size * t.grid_size) {
+
+          float x = p.pos.x / (float)t.grid_size;
+          int   x_int = x;
+          float x_remain = x - (float)x_int;
+
+          float z = p.pos.z / (float)t.grid_size;
+          int   z_int = z;
+          float z_remain = z - (float)z_int;
+
+          float height11 = t.height[(z_int       * t.size + x_int)     * 4];
+          float height12 = t.height[(z_int       * t.size + x_int + 1) * 4];
+          float height21 = t.height[((z_int + 1) * t.size + x_int)     * 4];
+          float height22 = t.height[((z_int + 1) * t.size + x_int + 1) * 4];
+
+          // 3 lerps
+
+          float heightx_1 = lerp(height11, height12, x_remain);
+          float heightx_2 = lerp(height21, height22, x_remain);
+          height          = lerp(heightx_1, heightx_2, z_remain);
+
+        }
+    } 
+
+    return height;
+}
+
+
 GameMode doPlayLogic(int active_players, struct play_state &state, struct player_input* inputs, struct player* players) {
 
     GameMode mode = GameMode::PLAY;
@@ -1828,13 +1880,18 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
         float right_move_x = cosf(right_yaw_in_radians); 
         float right_move_y = sinf(right_yaw_in_radians);
 
-        p.pos.x += right_move_x * in.move_x;
-        p.pos.z += right_move_y * in.move_x;
+        float multi = 1.0f;
+        if (in.sprint) { multi = 50; }
 
-        p.pos.x -= forward_move_x * in.move_y;
-        p.pos.z -= forward_move_y * in.move_y;
+        p.pos.x += right_move_x * in.move_x * multi;
+        p.pos.z += right_move_y * in.move_x * multi;
+
+        p.pos.x -= forward_move_x * in.move_y * multi;
+        p.pos.z -= forward_move_y * in.move_y * multi;
 
         std::cout << "player" << (i+1) << " POS X: " << p.pos.x << " Y: " << p.pos.y << " Z: " << p.pos.z << std::endl;
+
+        float terrain_y = getTerrainCollision(state.t, p);
 
         if (in.jump) {
 
@@ -1844,17 +1901,9 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
 
         p.vel.y -= 1.0f;
 
-        if (p.pos.y < 0 && p.vel.y < 0) { p.vel.y = 0; p.can_jump = 1; }
+        if (p.pos.y < terrain_y && p.vel.y < 0) { p.pos.y = terrain_y; p.vel.y = 0; p.can_jump = 1; }
 
         p.pos.y += p.vel.y;
-
-        if (p.pos.x > 0 && p.pos.x < state.t.size && p.pos.z > 0 && p.pos.z < state.t.size) {
-
-            log("inside terrain!!!");
-        } 
-
-
-        
 
 
 
@@ -2164,7 +2213,7 @@ int main(int argc, char* argv[]) {
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
     SDL_GL_SetSwapInterval(1); // vsync on
 
