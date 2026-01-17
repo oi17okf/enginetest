@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <algorithm>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -62,33 +63,49 @@ static inline float lerp(float val1, float val2, float x) {
     return val1 * (1 - x) + val2 * x;
 }
 
+static inline float distanceSQ(vec3_t a, vec3_t b) {
+    float dx = b.x - a.x;
+    float dy = b.y - a.y;
+    float dz = b.z - a.z;
+    return (dx*dx + dy*dy + dz*dz);
+}
 
 
-/* TODO
+
+/* TODO 2 - 2.5 weeks...
  * 
- * Implement texture for terrain.
- * Implement normals for terrain.
- * Add player with rotation (to where it is moving), and moving arms/legs etc.
- * Fix Obj loader
- * Hook up AABB collision to player
- * Add functional goal w level restart.
- * Add ability to go back to menu.
- * Add button that restarts the player.
- * Add visual timer
- * Improve menu & game UI.
+ * Implement texture for terrain. 0.5
+ * Implement normals for terrain. 0.5
+ * Add player with rotation (to where it is moving), and moving arms/legs etc. 1 -day
+ * Hook up AABB collision to player 0.7
+
+ * Add ability to go back to menu. 0.1
+
+ * Add visual timer 1.
+ 
  * 
- * Improve camera
- * Add actual nice player movement w abilities and proper physics.
- * Add moving objects (w pushing collision)
- * Add bouncers 
- * Add collectibles
- * Add door that opens after a certain amount of collectibles.
- * Add an enemy or two with fun AI.
+ * Improve camera 1
+ * Add actual nice player movement w abilities and proper physics. 1
+ * Add moving objects (w pushing collision) 0.5
+ * Add bouncers (no dmg) 0.5
+ * Add coin collectibles. 0.3
+ * add health collectibles 0.3
+ * add death functionality (just reset, but don't reset enemies etc, just skip that) 0.2
+ * Add door that opens(moves to a set location) after a certain amount of coins. 0.2
+ * Add an enemy that walk on terrain and follows the closest player, bumping causes dmg. jump on top of it to kill it. 0.2 
+ * Add an enemy that walks randomly on top of normals AABB's. But can fall down (thus through the map) 0.2
+ * Add projectiles. 0.3
+ * Add player stun. 0.3
+ * Add an enemy that shoots slow projectiles at player. 0.2
+ * Improve menu & game UI. 0.5
+ * Add punch that kills enemies. 0.3
+ * Add dash. 0.3
 
  * Add ability to edit terrain. Raycast to grid, increase closest (or group),
-                                Then update actual data structure, upload to GPU, and save to file...
+                                Then update actual data structure, upload to GPU, and save to file... 1 day.
 
- * Add ability edit actual level if time...
+ * Add ability edit actual level if time... 2 day.
+ * IMPLEMENT BASIC ONLINE MULTIPLAYER MODE?! 1-2 day.
  */
 
 
@@ -116,8 +133,8 @@ switch on mouse ray hit
 */
 
 
-#define DEFAULT_WINDOW_WIDTH  640
-#define DEFAULT_WINDOW_HEIGHT 480
+#define DEFAULT_WINDOW_WIDTH  1024
+#define DEFAULT_WINDOW_HEIGHT 768
 
 
 struct text_info  { int pos; 
@@ -941,8 +958,8 @@ void loadAllObjs() {
         std::vector<vec3_t> uvs;
         std::vector<vec3_t> normals;
 
-        std::set<std::tuple<int, int, int>> found_keys;
-        std::vector<int> indexes;
+        std::vector<std::tuple<int, int, int>> found_keys;
+        std::vector<unsigned int> indexes;
         std::vector<float> vbo_data;
 
         struct AABB col;
@@ -1012,16 +1029,16 @@ void loadAllObjs() {
                     std::tuple<int, int, int> index = std::make_tuple(v, t, n);
                     //std::cout << v << t << n << std::endl;
 
-                    auto it = found_keys.find(index);
+                    auto it = std::find(found_keys.begin(), found_keys.end(), index);
 
                     if (it != found_keys.end()) { 
 
-                        int key_index = std::distance(found_keys.begin(), it);
+                        unsigned int key_index = std::distance(found_keys.begin(), it); // Issue
                         indexes.push_back(key_index); 
 
                     } else { 
 
-                        found_keys.insert(index); 
+                        found_keys.push_back(index); 
                         indexes.push_back(found_keys.size() - 1); 
 
                         vec3_t pos    = vertexes[v - 1];
@@ -1668,6 +1685,7 @@ struct player_input {
     int sprint  = 0;
     int restart = 0;
     int pause   = 0;
+    int back    = 0;
     int quit    = 0;
 };
 
@@ -1685,10 +1703,12 @@ void getPlayInput(int active_players, struct player_input* inputs) {
 
             switch (event.key.key) {
 
-                case SDLK_SPACE:  { inputs[0].jump    = 1; break; }
-                case SDLK_LSHIFT: { inputs[0].dash    = 1; break; }
-                case SDLK_R:      { inputs[0].restart = 1; break; }
-                case SDLK_P:      { inputs[0].pause   = 1; break; }
+                case SDLK_SPACE:     { inputs[0].jump    = 1; break; }
+                case SDLK_LSHIFT:    { inputs[0].dash    = 1; break; }
+                case SDLK_R:         { inputs[0].restart = 1; break; }
+                case SDLK_P:         { inputs[0].pause   = 1; break; }
+                case SDLK_ESCAPE:    { inputs[0].quit    = 1; break; }
+                case SDLK_BACKSPACE: { inputs[0].back    = 1; break; }
                 
                 default: { break; }
             }
@@ -1729,7 +1749,7 @@ void getPlayInput(int active_players, struct player_input* inputs) {
                 case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  { inputs[c].dash    = 1;  break; }
                 case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: { inputs[c].punch   = 1;  break; }
                 case SDL_GAMEPAD_BUTTON_NORTH:          { inputs[c].restart = 1;  break; }
-                case SDL_GAMEPAD_BUTTON_BACK:           { inputs[c].quit    = 1;  break; }
+                case SDL_GAMEPAD_BUTTON_BACK:           { inputs[c].back    = 1;  break; }
                 case SDL_GAMEPAD_BUTTON_START:          { inputs[c].pause   = 1;  break; }
 
                 default: { break; } 
@@ -1859,6 +1879,26 @@ float getTerrainCollision(struct terrain &t, struct player &p) {
 }
 
 
+// Update to include other things.
+void initializePlayer(struct player &p, vec3_t start_point, int i) {
+
+    p.pos = vec3(start_point.x + (i * 5), start_point.y, start_point.z);
+    p.vel = vec3(0, 0, 0);
+
+    p.yaw = 0.0f;
+    p.pitch = 20.0f;
+    // Radius unchanged.
+
+    p.has_dashed = 0;
+    p.can_jump   = 0;
+
+    p.timer = 0.0f;
+
+    update_player_view(p);
+}
+
+
+
 GameMode doPlayLogic(int active_players, struct play_state &state, struct player_input* inputs, struct player* players) {
 
     GameMode mode = GameMode::PLAY;
@@ -1870,6 +1910,8 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
 
         p.yaw   += in.rotate_cam_x;
         p.pitch += in.rotate_cam_y;
+
+        p.radius -= in.zoom * 5;
 
         float forward_yaw_in_radians = radians(p.yaw);
         float right_yaw_in_radians   = radians(p.yaw + 90.0f);
@@ -1893,6 +1935,11 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
 
         float terrain_y = getTerrainCollision(state.t, p);
 
+        if (distanceSQ(p.pos, state.goal_point) < 100) {
+            // level complete, save time etc.
+            initializePlayer(p, state.start_point, i);
+        } 
+
         if (in.jump) {
 
             p.vel.y = 10;
@@ -1908,6 +1955,10 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
 
 
         update_player_view(p);
+
+        if (in.back) { mode = GameMode::MENU; }
+
+        if (in.restart) { initializePlayer(p, state.start_point, i); }
 
         if (in.quit) { mode = GameMode::QUIT; }
 
@@ -1935,6 +1986,20 @@ void renderPlayer(struct player p, int myself) {
 
 
     mat4_t model = m4_translation(p.pos);
+    update_shader_uniform("default", "model", model);
+    renderObj("teapot");
+}
+
+void renderStart(vec3_t pos) {
+
+    mat4_t model = m4_translation(pos);
+    update_shader_uniform("default", "model", model);
+    renderObj("teapot");
+}
+
+void renderGoal(vec3_t pos) {
+
+    mat4_t model = m4_translation(pos);
     update_shader_uniform("default", "model", model);
     renderObj("teapot");
 }
@@ -1980,6 +2045,9 @@ void renderPlay(int active_players, const struct play_state &state, struct playe
             //std::cout << "trying to render " << state.statics[j].mesh_name << " " << state.statics[j].texture_name << std::endl;
             renderStatic(state.statics[j]);
         }
+
+        renderStart(state.start_point);
+        renderGoal(state.goal_point);
 
         //render player(s) ---- IMPORTANT
         for (int j = 0; j < active_players; j++) {
@@ -2040,6 +2108,9 @@ struct play_result {
 
 };
 
+
+
+
 GameMode runGame(struct play_result &res, struct level_info level_info, int active_players) {
 
     log("rungame");
@@ -2076,19 +2147,14 @@ GameMode runGame(struct play_result &res, struct level_info level_info, int acti
 
     for (int i = 0; i < active_players; i++) {
 
-        players[i].pos = vec3(state.start_point.x + (i * 5), state.start_point.y, state.start_point.z);
-        players[i].vel = vec3(0, 0, 0);
+        initializePlayer(players[i], state.start_point, i);
 
         float player_window_width = g.window_width / active_players;
-
         players[i].cam.proj = m4_perspective(60, player_window_width / g.window_height, 1.0f, 10000.0f);
-        update_player_view(players[i]);
+
+        
         
     }
-
-    std::cout << "static objects:" << state.statics.size() << std::endl;
-
-    log("run game setup done");
 
     while (gamemode == GameMode::PLAY) {
 
@@ -2213,7 +2279,7 @@ int main(int argc, char* argv[]) {
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
     SDL_GL_SetSwapInterval(1); // vsync on
 
