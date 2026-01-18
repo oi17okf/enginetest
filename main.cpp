@@ -74,12 +74,13 @@ static inline float distanceSQ(vec3_t a, vec3_t b) {
 
 /* TODO 2 - 2.5 weeks...
  * 
+ * verify texture actually work... 0.2
  * Implement texture for terrain. 0.5
  * Implement normals for terrain. 0.5
- * Add player with rotation (to where it is moving), and moving arms/legs etc. 1 -day
+ * Fix so we can use scaling, rotation, pos at the same time in a matrix. 0.5
+ * Add player with rotation (to where it is moving), and moving arms/legs etc. 0.5
  * Hook up AABB collision to player 0.7
 
- * Add ability to go back to menu. 0.1
 
  * Add visual timer 1.
  
@@ -100,12 +101,14 @@ static inline float distanceSQ(vec3_t a, vec3_t b) {
  * Improve menu & game UI. 0.5
  * Add punch that kills enemies. 0.3
  * Add dash. 0.3
+ * add 3d text 1
 
  * Add ability to edit terrain. Raycast to grid, increase closest (or group),
                                 Then update actual data structure, upload to GPU, and save to file... 1 day.
 
  * Add ability edit actual level if time... 2 day.
  * IMPLEMENT BASIC ONLINE MULTIPLAYER MODE?! 1-2 day.
+ * 
  */
 
 
@@ -214,12 +217,13 @@ struct terrain {
     int size;
 
     int grid_size = 25.0f;
+
     // these are both bpp = 4, to make writing / reading simpler.
     std::vector<unsigned char> colors; // Allows for simple editing
     std::vector<unsigned char> height; // Same but also used for collision
 
-    int dirty = 0; //could be used as index, if we only change 1 height vert at a time.
-    // Otherwise make a vector of changed vertices.
+    std::vector<int> dirty_vertexes;
+
     std::string name;
 
 };
@@ -602,6 +606,7 @@ void loadTerrain(struct level_info &l, std::string file_name) {
     stbi_image_free(data);
 
     l.t.size = width;
+    l.t.name = file_name;
     // We should prob assert width/height/channels better but w.e
 }
 
@@ -705,6 +710,16 @@ void uploadTerrain(struct level_info &l, int editMode) {
 
 }
 
+void saveTerrain(std::vector<unsigned char> &colors, std::vector<unsigned char> heights, std::string file_name) {
+
+    const int width    = 512;
+    const int height   = 512;
+    const int channels = 4; 
+
+    stbi_write_png((terrainDir + file_name + "_color.png").c_str(),  width, height, channels, colors.data(),  width * channels);
+    stbi_write_png((terrainDir + file_name + "_height.png").c_str(), width, height, channels, heights.data(), width * channels);
+}
+
 void generateDefaultTerrain(std::string file_name) {
 
     const int width    = 512;
@@ -732,15 +747,29 @@ void generateDefaultTerrain(std::string file_name) {
         }
     }
 
-    stbi_write_png((terrainDir + file_name + "_color.png").c_str(),  width, height, channels, colors.data(),  width * channels);
-    stbi_write_png((terrainDir + file_name + "_height.png").c_str(), width, height, channels, heights.data(), width * channels);
+    saveTerrain(colors, heights, file_name);
+}
+
+// Investigate glMapBufferTerrain for this.
+void refreshTerrain(struct terrain &t) {
+
+    glBindVertexArray(g.r.terrainVAO); // we could skip this if we assumed no vao is bound.
+    glBindBuffer(GL_ARRAY_BUFFER, g.r.terrainVBO);
+
+    for (int i : t.dirty_vertexes) {
+
+        float new_height = t.height[i];
+        GLintptr offset = (i * sizeof(float) * 6) + sizeof(float); 
+        glBufferSubData(GL_ARRAY_BUFFER, offset, sizeof(float), &new_height); 
+
+    }
+
+    t.dirty_vertexes.clear();
+
+    glBindVertexArray(0);
 }
 
 
-void saveTerrain() {
-
-    
-}
 
 void checkTerrain(struct level_info &l, std::string file_name) {
     
@@ -1633,6 +1662,8 @@ GameMode runMenu(struct menu_result &res) {
     struct menu_state state;
     GameMode gamemode = GameMode::MENU;
     refreshLevels(state.levels);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
 
     log("inside menu");
 
@@ -1644,7 +1675,7 @@ GameMode runMenu(struct menu_result &res) {
         
         log("after logic");
         update_fps();
-        limit_fps(2);
+        limit_fps(10);
         log("after fps");
 
         checkShaders(g.r.shaders);
@@ -1662,7 +1693,7 @@ GameMode runMenu(struct menu_result &res) {
 
     res.active_players = state.selected_players;
 
-    if (gamemode == GameMode::PLAY) { res.l = state.levels[state.active_item]; }
+    if (gamemode == GameMode::PLAY || gamemode == GameMode::EDIT) { res.l = state.levels[state.active_item]; }
 
 
     return gamemode;
@@ -1968,14 +1999,19 @@ GameMode doPlayLogic(int active_players, struct play_state &state, struct player
 }
 
 
-void renderTerrain(unsigned int terrainVAO, int terrain_indices, struct camera c) {
+void renderTerrain(unsigned int terrainVAO, int terrain_indices, mat4_t proj, mat4_t view) {
 
-    update_shader_uniform("terrain", "projection", c.proj);
-    update_shader_uniform("terrain", "view",       c.view);
+    update_shader_uniform("terrain", "projection", proj);
+    update_shader_uniform("terrain", "view",       view);
 
     glBindVertexArray(terrainVAO);
 
     glDrawElements(GL_TRIANGLE_STRIP, terrain_indices, GL_UNSIGNED_INT, (void*) 0);
+}
+
+void renderTerrain(unsigned int vao, int indices, struct camera c) {
+
+    renderTerrain(vao, indices, c.proj, c.view);
 
 }
 
@@ -2166,7 +2202,7 @@ GameMode runGame(struct play_result &res, struct level_info level_info, int acti
         gamemode = doPlayLogic(active_players, state, inputs, players);
         log("play logic done");
         update_fps();
-        limit_fps(10);
+        limit_fps(30);
         
         renderPlay(active_players, state, players);
         log("render play done");
@@ -2189,8 +2225,43 @@ GameMode runGame(struct play_result &res, struct level_info level_info, int acti
 
 }
 
+vec3_t get_dir(float yaw, float pitch) {
+
+    vec3_t dir = vec3(cosf(radians(yaw)) * cosf(radians(pitch)),
+                      sinf(radians(pitch)),
+                      sinf(radians(yaw)) * cosf(radians(pitch)));
+
+    dir = v3_norm(dir); // try this on player too?
+
+    return dir;
+
+}
+
+
+
+void renderCube(vec3_t pos) {
+
+    mat4_t model = m4_translation(pos);
+    update_shader_uniform("default", "model", model);
+    renderObj("cube");
+}
+
 struct edit_state {
-    float something;
+
+    struct terrain t;
+
+    vec3_t pos;
+    vec3_t dir;
+    float yaw;
+    float pitch;
+
+    mat4_t proj;
+    mat4_t view;
+
+    vec3_t cursor_pos;
+    float cursor_strength = 10;
+
+
 };
 
 struct edit_result {
@@ -2198,20 +2269,221 @@ struct edit_result {
     float something;
 };
 
+struct edit_input {
+
+    float move_x = 0;
+    float move_y = 0;
+    int   sprint = 0;
+
+    float rotate_cam_x = 0;
+    float rotate_cam_y = 0;
+
+    int toggle_action = 0;
+    int toggle_mode   = 0;
+    int action        = 0;
+
+    float change_radius = 0;
+
+    int quit = 0;
+    int back = 0;
+};
+
+struct edit_input getEditInput() {
+
+    struct edit_input i;
+
+    SDL_Event event;
+
+    while (SDL_PollEvent(&event)) {
+
+        i.quit = check_default_events(event);
+
+        if (event.type == SDL_EVENT_KEY_DOWN) {
+
+            switch (event.key.key) {
+
+                case SDLK_SPACE:     { i.action        = 1; break; }
+                case SDLK_Q:         { i.toggle_mode   = 1; break; }
+                case SDLK_E:         { i.toggle_action = 1; break; }
+                case SDLK_ESCAPE:    { i.quit          = 1; break; }
+                case SDLK_BACKSPACE: { i.back          = 1; break; }
+                
+                default: { break; }
+            }
+        }
+
+        if (event.type == SDL_EVENT_MOUSE_MOTION) {
+
+            if (event.motion.xrel > 0.01f || event.motion.xrel < -0.01f) {
+                i.rotate_cam_x = event.motion.xrel;
+            }
+
+            if (event.motion.yrel > 0.01f || event.motion.yrel < -0.01f) {
+                i.rotate_cam_y = event.motion.yrel;
+            }
+        }
+
+        if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+
+            i.change_radius = event.wheel.y;
+        }                                   
+    }
+
+    const bool* keystate = SDL_GetKeyboardState(nullptr);
+
+    if (keystate[SDL_SCANCODE_W])      { i.move_y   += 1; }
+    if (keystate[SDL_SCANCODE_S])      { i.move_y   -= 1; }
+    if (keystate[SDL_SCANCODE_A])      { i.move_x   += 1; }
+    if (keystate[SDL_SCANCODE_D])      { i.move_x   -= 1; }
+    if (keystate[SDL_SCANCODE_LSHIFT]) { i.sprint    = 1; }
+    if (keystate[SDL_SCANCODE_SPACE])  { i.action    = 1; }
+
+    return i;
+}
+
+// X,Z indexes have to be updated if we move the terrain from 0,0 start.
+vec3_t traceTerrain(vec3_t pos, vec3_t dir, terrain &t) {
+
+    int steps_left = 1000;
+
+    vec3_t p = pos;
+
+    vec3_t hit_point = vec3(-1, -1, -1);
+
+    while (steps_left > 0) {
+
+        int x = p.x / t.grid_size;
+        int z = p.z / t.grid_size;
+
+        if (x >= 0 && z >= 0 && x < t.size && z < t.size) {
+
+            int i = (z * t.size + x) * 4;
+            int height = t.height[i];
+
+            if (i == p.y / t.grid_size) {
+
+                hit_point = p;
+
+                t.height[i]++;
+                t.height[i + 1]++;
+                t.height[i + 2]++;
+                t.dirty_vertexes.push_back(i / 4);
+
+                break;
+            }
+        }
+
+        p = v3_add(p, dir);
+        steps_left--;
+    }
+
+    return p;
+}
+
+GameMode doEditLogic(struct edit_state &state, struct edit_input i) {
+
+    GameMode mode = GameMode::EDIT;
+
+    state.cursor_strength += i.change_radius;
+
+    state.yaw   += i.rotate_cam_x;
+    state.pitch += i.rotate_cam_y;
+
+    state.pos        = v3_add(state.pos, v3_muls(state.dir, i.move_y));
+
+    vec3_t right_dir = v3_norm(v3_cross(state.dir, vec3(0.0f, 1.0f, 0.0f)));
+    state.pos        = v3_add(state.pos, v3_muls(right_dir, i.move_x));
+
+
+    state.dir  = get_dir(state.yaw, state.pitch);
+    state.view = m4_look_at(state.pos, v3_add(state.pos, state.dir), vec3(0.0f, 1.0f, 0.0f));
+
+    state.cursor_pos = traceTerrain(state.pos, state.dir, state.t);
+
+    if (state.t.dirty_vertexes.size()) {
+
+        refreshTerrain(state.t);
+    }
+
+    if (i.back) { mode = GameMode::MENU; }
+    if (i.quit) { mode = GameMode::QUIT; }
+
+    return mode;
+}
+
+void renderEdit(struct edit_state &state) {
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+    setActiveProgram("default");
+    update_shader_uniform("default", "view",       state.view);
+    update_shader_uniform("default", "projection", state.proj);
+
+    renderCube(state.cursor_pos);
+
+
+
+
+
+    setActiveProgram("terrain");
+    renderTerrain(g.r.terrainVAO, g.r.terrain_indices, state.proj, state.view);
+
+    // UI
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+
+    setActiveProgram("text2d");
+    mat4_t ortho_cam = m4_ortho(0, g.window_width, g.window_height, 0, -1, 1);
+    update_shader_uniform("text2d", "ortho_cam", ortho_cam);
+
+    drawtext_2d("E", g.window_width / 2, g.window_height / 2, 20);
+
+    // Draw info about current edit state...
+
+    glEnable(GL_DEPTH_TEST); 
+    glEnable(GL_CULL_FACE);  
+
+
+    SDL_GL_SwapWindow(g.window);
+}
 
 GameMode runEditor(struct edit_result &res, struct level_info level_info) {
 
+    log("????");
     GameMode gamemode = GameMode::EDIT;
     struct edit_state state;
-    //fill w values from level_info
+    state.t = level_info.t;
 
-    //while (gamemode == GameMode::EDIT) {
+    state.proj = m4_perspective(60, g.window_width / g.window_height, 1.0f, 10000.0f);
+    state.dir  = get_dir(state.yaw, state.pitch);
+    state.view = m4_look_at(state.pos, v3_add(state.pos, state.dir), vec3(0.0f, 1.0f, 0.0f));
 
-        // Input
-        // Logic
-        // Render (will share a lot from game_render)
-        // Most things her will, so make sure to do Play w functions.
-    //}
+    log("???");
+
+    uploadTerrain(level_info, 1);
+
+    log("edit init");
+
+    while (gamemode == GameMode::EDIT) {
+
+        struct edit_input input = getEditInput();
+        log("got input");
+        gamemode = doEditLogic(state, input);
+        log("got logic");
+        update_fps();
+        limit_fps(30);
+
+        checkShaders(g.r.shaders);
+        checkShaderPrograms(g.r.programs, g.r.shaders);
+        cleanShaders(g.r.shaders);
+
+        renderEdit(state);
+        log("got reender");
+
+    }
+
+    saveTerrain(state.t.colors, state.t.height, state.t.name);
 
 
     return gamemode;
